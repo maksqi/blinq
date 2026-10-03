@@ -2,7 +2,7 @@ import { createError, H3Error } from 'h3'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { apiError, notImplemented } from './api-error'
-import { isZodLikeError, normalizeApiError, toValidationIssues } from './validation'
+import { apiErrorResponse, isZodLikeError, normalizeApiError, toValidationIssues } from './validation'
 
 const schema = z.object({ email: z.email(), nested: z.object({ list: z.array(z.number()) }) }).strict()
 
@@ -73,6 +73,32 @@ describe('normalizeApiError', () => {
     expect(error.message).toBe('Something went wrong on the server.')
     expect(error.data).toEqual({ code: 'INTERNAL' })
     expect(error.unhandled).toBe(false)
+  })
+
+  it('builds the documented response without URL, stack or message, always no-store (F-002, F-032)', () => {
+    const notFound = createError({ statusCode: 404, statusMessage: 'Cannot find any path matching /api/x.' })
+    normalizeApiError(notFound)
+    const response = apiErrorResponse(notFound)
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ statusCode: 404, statusMessage: 'Not found.', data: { code: 'NOT_FOUND' } })
+    expect(JSON.stringify(response.body)).not.toContain('/api/x')
+    expect(response.headers).toMatchObject({
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    expect(response.headers['Retry-After']).toBeUndefined()
+
+    const validation = apiErrorResponse(apiError('VALIDATION_FAILED', 400, { issues: [{ path: 'email', message: 'x' }] }))
+    expect(validation.body.data).toEqual({ code: 'VALIDATION_FAILED', details: { issues: [{ path: 'email', message: 'x' }] } })
+  })
+
+  it('adds Retry-After to 429s that carry details.retryAfter, unless one is set already', () => {
+    const busy = apiError('RATE_LIMITED', 429, { retryAfter: 1 })
+    expect(apiErrorResponse(busy).headers['Retry-After']).toBe('1')
+    expect(apiErrorResponse(busy, { retryAfter: true }).headers['Retry-After']).toBeUndefined()
+    expect(apiErrorResponse(apiError('RATE_LIMITED', 429)).headers['Retry-After']).toBeUndefined()
   })
 
   it('adds generic codes to framework errors', () => {

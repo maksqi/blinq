@@ -37,6 +37,7 @@ function expectFileHeaders(res: Response) {
   expect(res.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'")
   expect(res.headers.get('cache-control')).toBe('no-store')
   expect(res.headers.get('accept-ranges')).toBe('bytes')
+  expect(res.headers.get('cross-origin-resource-policy')).toBe('same-origin') // F-028
 }
 
 describe('recording file', () => {
