@@ -344,16 +344,17 @@ const lockThrottleKey = (key: string) =>
 /**
  * Atomically decides and reserves an attempt (`planAttempt`) in `login_throttle`. Per-key advisory locks (also for
  * rows that do not exist yet), taken in sorted order, make parallel attempts on a key run one after another: the 7th of
- * 40 parallel wrong passwords already sees six reserved failures and waits.
+ * 40 parallel wrong passwords already sees six reserved failures and waits. Without an explicit `now`, the clock is
+ * read once the locks are held, so time spent waiting for them never inflates `Retry-After`.
  */
-export async function reserveAttempt(keys: AttemptKey[], now: Date = new Date()): Promise<AttemptDecision> {
+export async function reserveAttempt(keys: AttemptKey[], now?: Date): Promise<AttemptDecision> {
   const specs = normalizeAttemptKeys(keys)
   if (!specs.length) return { allowed: true, reservation: { keys: [] } }
   const names = specs.map((spec) => spec.key)
   return useDb().transaction(async (tx) => {
     for (const key of [...names].sort()) await tx.execute(lockThrottleKey(key))
     const rows = await tx.select().from(loginThrottle).where(inArray(loginThrottle.key, names))
-    const decision = planAttempt(specs, rows, now)
+    const decision = planAttempt(specs, rows, now ?? new Date())
     if (!decision.allowed) return decision
     for (const entry of decision.reservation.keys) {
       const values = { failures: entry.failures, nextAllowedAt: entry.nextAllowedAt, updatedAt: entry.updatedAt }

@@ -101,18 +101,18 @@ describe('error responses', () => {
     expectJson(res)
   })
 
-  // pending finding: F-002 — 404 error responses carry `cache-control: no-cache` (Nitro's error handler), not no-store.
-  it.skip('404 for an unknown API path is the envelope with no-store', async () => {
+  it('404 for an unknown API path is the envelope with no-store (F-002)', async () => {
     const res = await createClient().get(`/api/does-not-exist-${randomBytes(4).toString('hex')}`)
     expectEnvelope(res, 404, 'NOT_FOUND')
     expectJson(res)
   })
 
-  it('404 for an unknown API path is the envelope with nosniff (cache header: see F-002)', async () => {
-    const res = await createClient().get(`/api/does-not-exist-${randomBytes(4).toString('hex')}`)
-    expectEnvelope(res, 404, 'NOT_FOUND')
-    expectApiHeaders(res)
-    expect(res.headers.get('content-type')).toMatch(/^application\/json/)
+  it('error bodies carry only statusCode, statusMessage and data, never the request URL (F-032, F-044)', async () => {
+    const path = `/api/does-not-exist-${randomBytes(4).toString('hex')}`
+    const res = await createClient().get(path, { headers: { 'x-forwarded-host': 'evil.example' } })
+    expect(Object.keys(res.body).sort()).toEqual(['data', 'statusCode', 'statusMessage'])
+    expect(res.text).not.toContain('evil.example')
+    expect(res.text).not.toContain(path)
   })
 
   it('413 for a body above the 1 MB limit is the envelope', async () => {

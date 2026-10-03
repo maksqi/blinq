@@ -40,7 +40,8 @@ export { backoffDelayMs, emailThrottleKey, loginAttemptKeys }
 export type { AttemptKey, AttemptReservation }
 
 export interface ThrottleStore {
-  reserve(keys: AttemptKey[], now: Date): Promise<AttemptDecision>
+  /** Without `now`, the store reads the clock once the attempt holds its keys. */
+  reserve(keys: AttemptKey[], now?: Date): Promise<AttemptDecision>
   refund(reservation: AttemptReservation, keys?: string[]): Promise<void>
   clear(keys: string[]): Promise<void>
 }
@@ -57,7 +58,7 @@ export interface LoginThrottle {
 
 export function createLoginThrottle(store: ThrottleStore): LoginThrottle {
   return {
-    async reserve(event, keys, now = new Date()) {
+    async reserve(event, keys, now) {
       const decision = await store.reserve(keys, now)
       if (!decision.allowed) throwRateLimited(event, decision.retryAfterMs)
       return decision.reservation
@@ -97,7 +98,7 @@ export function memoryThrottleStore(): ThrottleStore & {
     rows,
     peek: plan,
     async reserve(keys, now) {
-      const decision = plan(keys, now)
+      const decision = plan(keys, now ?? new Date())
       if (decision.allowed) {
         for (const entry of decision.reservation.keys) {
           rows.set(entry.key, {
