@@ -2,7 +2,15 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { createApp, defineEventHandler, toNodeListener } from 'h3'
 import { afterEach, describe, expect, it } from 'vitest'
-import { closeAllSseStreams, createSseStream, formatSseComment, formatSseEvent, openSseStreamCount } from './sse'
+import {
+  closeAllSseStreams,
+  createSseStream,
+  createSseStreamGroups,
+  formatSseComment,
+  formatSseEvent,
+  openSseStreamCount,
+  type SseStream,
+} from './sse'
 
 describe('SSE formatting', () => {
   it('writes an event name, optional id and one JSON data line', () => {
@@ -84,5 +92,54 @@ describe('createSseStream', () => {
     await new Promise((r) => setTimeout(r, 50))
     closeAllSseStreams()
     expect(await text).toContain('event: status')
+  })
+})
+
+describe('createSseStreamGroups', () => {
+  function fakeStream(): SseStream {
+    const listeners: Array<() => void> = []
+    let closed = false
+    return {
+      send: () => {},
+      comment: () => {},
+      close() {
+        if (closed) return
+        closed = true
+        for (const listener of listeners.splice(0)) listener()
+      },
+      onClose(listener) {
+        if (closed) listener()
+        else listeners.push(listener)
+      },
+      get closed() {
+        return closed
+      },
+      start: () => Promise.resolve(),
+    }
+  }
+
+  it('counts open streams per key, oldest first, and forgets closed ones (F-019)', () => {
+    const groups = createSseStreamGroups()
+    const [a, b, c] = [fakeStream(), fakeStream(), fakeStream()]
+    groups.add('request-1', a)
+    groups.add('request-1', b)
+    groups.add('request-2', c)
+    expect(groups.count('request-1')).toBe(2)
+    expect(groups.oldest('request-1')).toBe(a)
+    a.close()
+    expect(groups.count('request-1')).toBe(1)
+    expect(groups.oldest('request-1')).toBe(b)
+    b.close()
+    c.close()
+    expect(groups.count('request-1')).toBe(0)
+    expect(groups.size).toBe(0)
+  })
+
+  it('ignores streams that are already closed', () => {
+    const groups = createSseStreamGroups()
+    const stream = fakeStream()
+    stream.close()
+    groups.add('k', stream)
+    expect(groups.count('k')).toBe(0)
   })
 })
