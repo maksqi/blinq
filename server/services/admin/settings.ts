@@ -57,7 +57,7 @@ export async function updateAdminSettings(rawBody: unknown, actor: AdminActor): 
   // Read the stored values, not a cached copy that another process may have outdated.
   invalidateSettingsCache()
   const before = await getSettings()
-  const after = await updateSettings(rawBody, actor.user.id)
+  const after = await updateSettings(rawBody, actor.user.id, now)
   const changes = settingsChanges(before, after)
   if (changes.fields.length) {
     await audit(

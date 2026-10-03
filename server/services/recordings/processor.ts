@@ -215,8 +215,35 @@ async function markFailed(id: string, code: FailureCode, log: Logger, detail?: s
   log.warn('recording processing failed', { code, ...(detail ? { detail } : {}) })
 }
 
-/** The queue worker. Never throws for media problems; unexpected errors propagate (the row stays `processing`). */
-export async function processRecording(id: string, signal: AbortSignal): Promise<void> {
+/** Pure: the columns of a recording that became ready at `processedAt` (kept `retentionDays` from then). */
+export function readyColumns(
+  id: string,
+  outcome: Extract<JobOutcome, { kind: 'ready' }>,
+  processedAt: Date,
+  retentionDays: number,
+) {
+  return {
+    status: 'ready' as const,
+    error: null,
+    storageKey: storageKeyFor(id),
+    sizeBytes: outcome.sizeBytes,
+    durationMs: outcome.durationMs,
+    width: outcome.width,
+    height: outcome.height,
+    processedAt,
+    expiresAt: new Date(processedAt.getTime() + retentionDays * DAY_MS),
+  }
+}
+
+/**
+ * The queue worker. Never throws for media problems; unexpected errors propagate (the row stays `processing`).
+ * `now` is the clock for `processed_at` and the retention deadline (injectable for tests).
+ */
+export async function processRecording(
+  id: string,
+  signal: AbortSignal,
+  now: () => Date = () => new Date(),
+): Promise<void> {
   const log = logger.child({ recordingId: id })
   const claim = await claimJob(id)
   if (!claim) {
@@ -250,21 +277,10 @@ export async function processRecording(id: string, signal: AbortSignal): Promise
       await markFailed(id, outcome.code, log, outcome.detail)
       return
     }
-    const processedAt = new Date()
     const settings = await getSettings()
     const updated = await db
       .update(recordings)
-      .set({
-        status: 'ready',
-        error: null,
-        storageKey: storageKeyFor(id),
-        sizeBytes: outcome.sizeBytes,
-        durationMs: outcome.durationMs,
-        width: outcome.width,
-        height: outcome.height,
-        processedAt,
-        expiresAt: new Date(processedAt.getTime() + settings['recording.retentionDays'] * DAY_MS),
-      })
+      .set(readyColumns(id, outcome, now(), settings['recording.retentionDays']))
       .where(and(eq(recordings.id, id), eq(recordings.status, 'processing')))
       .returning({ id: recordings.id })
     if (!updated.length) {

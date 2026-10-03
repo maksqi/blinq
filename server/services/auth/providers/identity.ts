@@ -18,7 +18,9 @@ import type { AuthProvider, AuthProviderId, VerifiedIdentity } from './types'
 export function createIdentityProvider<Input>(
   id: Exclude<AuthProviderId, 'password'>,
   verify: (input: Input) => Promise<VerifiedIdentity | null>,
+  options: { now?: () => Date } = {},
 ): AuthProvider<Input> {
+  const now = options.now ?? (() => new Date())
   return {
     id,
     async authenticate(input) {
@@ -26,7 +28,7 @@ export function createIdentityProvider<Input>(
       if (!verified?.subject) return null
       const [row] = await useDb()
         .update(authIdentities)
-        .set({ lastUsedAt: new Date(), ...(verified.email ? { email: verified.email.toLowerCase() } : {}) })
+        .set({ lastUsedAt: now(), ...(verified.email ? { email: verified.email.toLowerCase() } : {}) })
         .where(and(eq(authIdentities.provider, id), eq(authIdentities.subject, verified.subject)))
         .returning({ userId: authIdentities.userId })
       return row ? { userId: row.userId } : null

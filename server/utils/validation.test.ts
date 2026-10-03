@@ -1,7 +1,7 @@
 import { createError, H3Error } from 'h3'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { apiError, notImplemented } from './api-error'
+import { apiError } from './api-error'
 import { apiErrorResponse, isZodLikeError, normalizeApiError, toValidationIssues } from './validation'
 
 const schema = z.object({ email: z.email(), nested: z.object({ list: z.array(z.number()) }) }).strict()
@@ -50,10 +50,10 @@ describe('normalizeApiError', () => {
     const coded = apiError('ROOM_NOT_FOUND', 404)
     expect(normalizeApiError(coded)).toEqual({ kind: 'coded' })
     expect(coded.data).toEqual({ code: 'ROOM_NOT_FOUND' })
-    const stub = notImplemented('auth')
-    normalizeApiError(stub)
-    expect(stub.statusCode).toBe(501)
-    expect(stub.statusMessage).toBe('Not implemented yet (auth)')
+    const custom = createError({ statusCode: 501, statusMessage: 'Not implemented yet', data: { code: 'INTERNAL' } })
+    normalizeApiError(custom)
+    expect(custom.statusCode).toBe(501)
+    expect(custom.statusMessage).toBe('Not implemented yet')
   })
 
   it('maps unknown routes to NOT_FOUND', () => {

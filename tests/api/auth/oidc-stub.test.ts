@@ -31,8 +31,12 @@ interface StubCallback {
   valid: boolean
 }
 
-const stub = createIdentityProvider<StubCallback>('oidc:stub', async (callback) =>
-  callback.valid ? { subject: callback.sub, email: null } : null,
+/** The provider's injected clock (F-047). */
+const STUB_NOW = new Date('2026-09-30T09:00:00Z')
+const stub = createIdentityProvider<StubCallback>(
+  'oidc:stub',
+  async (callback) => (callback.valid ? { subject: callback.sub, email: null } : null),
+  { now: () => STUB_NOW },
 )
 
 let unregister: (() => void) | undefined
@@ -107,7 +111,7 @@ describe('OIDC stub provider', () => {
       .select()
       .from(authIdentities)
       .where(and(eq(authIdentities.provider, 'oidc:stub'), eq(authIdentities.subject, subject)))
-    expect(identity!.lastUsedAt).not.toBeNull()
+    expect(identity!.lastUsedAt).toEqual(STUB_NOW)
     const logins = await auditRows({ action: 'auth.login', targetId: user.id })
     expect(logins.map((r) => r.details)).toEqual([{ method: 'oidc:stub' }])
 

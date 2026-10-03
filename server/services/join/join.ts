@@ -311,7 +311,9 @@ export async function joinRoom(event: H3Event, slug: string, input: JoinRequestI
     return { row: row!, meeting, guestCookie, lobby, room: current }
   })
 
-  if (outcome.guestCookie) setGuestCookie(event, room.slug, outcome.guestCookie.token, { expiresAt: outcome.guestCookie.expiresAt })
+  if (outcome.guestCookie) {
+    setGuestCookie(event, room.slug, outcome.guestCookie.token, { expiresAt: outcome.guestCookie.expiresAt, now })
+  }
   if (outcome.lobby) {
     await notifyLobbyChanged(room.id, outcome.meeting?.id ?? null)
     return { status: 202, body: { status: 'waiting', requestId: outcome.row.id } }
