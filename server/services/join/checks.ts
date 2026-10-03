@@ -2,12 +2,13 @@
  * Pure join rules (rooms-backend, docs/API.md §6). `POST /api/join/:slug` applies them in this order, stopping at the
  * first failure:
  *   proof → (resume) → invite → guests allowed → lock → password → removed/denied in the live meeting → capacity →
- *   waiting room.
+ *   waiting room (also for participants on the network of a removed or denied row: `sharesNetwork`).
  * Hosts and co-hosts skip the invite, the lock, the password (decision) and the waiting room. Capacity applies to
  * everyone. `inviteCheck`, `guestCheck`, `lockCheck`, `finalStatusCheck`, `capacityCheck` and `lobbyCapacityCheck`
- * return the error code or null; `passwordNeeded` and `lobbyNeeded` decide whether that step applies.
+ * return the error code or null; `passwordNeeded`, `lobbyNeeded` and `sharesNetwork` decide whether a step applies.
  */
 import type { ParticipantRole } from '#shared/schemas/livekit'
+import { limiterKeysForIp, normalizeIp } from '../../utils/client-ip'
 import type { InviteState } from '../invites/policy'
 
 export const LOBBY_MAX_WAITING = 50
@@ -59,6 +60,16 @@ export function lobbyNeeded(role: ParticipantRole, waitingRoom: boolean): boolea
 
 export function lobbyCapacityCheck(waiting: number): 'LOBBY_FULL' | null {
   return waiting >= LOBBY_MAX_WAITING ? 'LOBBY_FULL' : null
+}
+
+/**
+ * Whether `ip` is on the network of one of `refused` (the IPs of removed or denied rows of the live meeting): the
+ * same IPv4 address or the same IPv6 /64, like the limiters. A participant who matches goes through the waiting room
+ * even when the room has none (F-018). An unknown IP matches nothing.
+ */
+export function sharesNetwork(ip: string | null, refused: readonly string[]): boolean {
+  const net = normalizeIp(ip) ? limiterKeysForIp(ip).net : null
+  return net !== null && refused.some((other) => normalizeIp(other) !== null && limiterKeysForIp(other).net === net)
 }
 
 /**

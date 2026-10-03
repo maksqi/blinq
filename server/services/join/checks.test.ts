@@ -11,6 +11,7 @@ import {
   lobbyNeeded,
   lockCheck,
   passwordNeeded,
+  sharesNetwork,
 } from './checks'
 
 describe('join checks', () => {
@@ -59,6 +60,18 @@ describe('join checks', () => {
     expect(LOBBY_MAX_WAITING).toBe(50)
     expect(lobbyCapacityCheck(49)).toBeNull()
     expect(lobbyCapacityCheck(50)).toBe('LOBBY_FULL')
+  })
+
+  it('matches the network of removed or denied rows: same IPv4, same IPv6 /64, never an unknown IP (F-018)', () => {
+    expect(sharesNetwork('203.0.113.7', ['198.51.100.1', '203.0.113.7'])).toBe(true)
+    expect(sharesNetwork('203.0.113.8', ['203.0.113.7'])).toBe(false)
+    expect(sharesNetwork('2001:db8:1:2::beef', ['2001:db8:1:2::1'])).toBe(true)
+    expect(sharesNetwork('2001:db8:1:3::1', ['2001:db8:1:2::1'])).toBe(false)
+    expect(sharesNetwork('::ffff:203.0.113.7', ['203.0.113.7'])).toBe(true)
+    expect(sharesNetwork(null, ['203.0.113.7'])).toBe(false)
+    expect(sharesNetwork('203.0.113.7', [])).toBe(false)
+    expect(sharesNetwork('203.0.113.7', ['not-an-ip'])).toBe(false)
+    expect(sharesNetwork('not-an-ip', ['not-an-ip'])).toBe(false)
   })
 
   it('starts participants without a microphone when self-unmute is off', () => {

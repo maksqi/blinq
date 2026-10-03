@@ -4,14 +4,15 @@
  * - `getJoinInfo(event, slug, input)` → `JoinInfo`: checks the proof and a supplied invite (never consumes it).
  * - `joinRoom(event, slug, input)` → `{ status: 200, body: JoinGrant }` or `{ status: 202, body: JoinWaiting }`.
  *   Order (checks.ts): proof → resume → invite → guests allowed → lock → password (backoff reserved before the check)
- *   → removed/denied in the live meeting → capacity → waiting room. Everything from the removed/denied check on runs
- *   under the room lock, together with the invite use, the guest session, meeting creation (first admitted join:
- *   epoch + LiveKit room) and the row insert, so concurrent joins can neither exceed limits nor start two meetings.
+ *   → removed/denied in the live meeting → capacity → waiting room (participants on the network of a removed or
+ *   denied row wait too, even without a waiting room: F-018). Everything from the removed/denied check on runs under
+ *   the room lock, together with the invite use, the guest session, meeting creation (first admitted join: epoch +
+ *   LiveKit room) and the row insert, so concurrent joins can neither exceed limits nor start two meetings.
  * - `proofMatches(room, proof)`: `sha256(proof)` against `join_proof_hash` in constant time (`hashToken` stores the
  *   hex digest of the base64url proof exactly as sent, like every other token).
  * A wrong proof reveals nothing about the room (403 `ROOM_KEY_INVALID`); unknown or deleted slugs are 404.
  */
-import { and, count, desc, eq, inArray, isNull, or } from 'drizzle-orm'
+import { and, count, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm'
 import type { H3Event } from 'h3'
 import type { z } from 'zod'
 import { slugSchema } from '#shared/schemas/common'
@@ -60,6 +61,7 @@ import {
   lobbyNeeded,
   lockCheck,
   passwordNeeded,
+  sharesNetwork,
 } from './checks'
 import { buildJoinGrant } from './grant'
 import { pickResumable } from './resume'
@@ -175,6 +177,22 @@ async function finalStatuses(tx: Tx, meetingId: string, who: Who): Promise<strin
     )
   return rows.map((row) => row.status)
 }
+
+/** IPs of the people removed from or denied in the meeting (rows keep the IP they joined from). */
+async function refusedIps(tx: Tx, meetingId: string): Promise<string[]> {
+  const rows = await tx
+    .select({ ip: callParticipants.ip })
+    .from(callParticipants)
+    .where(
+      and(
+        eq(callParticipants.meetingId, meetingId),
+        inArray(callParticipants.status, ['removed', 'denied']),
+        isNotNull(callParticipants.ip),
+      ),
+    )
+  return rows.flatMap((row) => (row.ip ? [row.ip] : []))
+}
+
 async function countRows(tx: Tx, where: ReturnType<typeof and>): Promise<number> {
   const [row] = await tx.select({ value: count() }).from(callParticipants).where(where)
   return row?.value ?? 0
@@ -235,7 +253,12 @@ export async function joinRoom(event: H3Event, slug: string, input: JoinRequestI
     const full = capacityCheck(active, effectiveMaxParticipants(current, settings))
     if (full) throw apiError(full, 409)
 
-    const lobby = lobbyNeeded(role, current.waitingRoom)
+    // A fresh cookie or a dropped session must not undo a removal (F-018): someone on the network of a removed or
+    // denied participant asks the moderators first, even in a room without a waiting room. Never a refusal: a shared
+    // network (an office NAT) holds innocent people too.
+    const lobby =
+      lobbyNeeded(role, current.waitingRoom) ||
+      (role === 'participant' && meeting !== null && sharesNetwork(ip, await refusedIps(tx, meeting.id)))
     if (lobby) {
       const waiting = await countRows(
         tx,
