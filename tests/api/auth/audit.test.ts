@@ -59,6 +59,8 @@ describe('audit entries', () => {
       async () => {
         const user = await createUser()
         await createClient().post('/api/auth/password-reset/request', { body: { email: user.email } })
+        // Written after the response (F-024), before the mail goes out.
+        await mailToken(user.email, '/reset-password', /Reset your/)
         return { targetId: user.id }
       },
     ],
