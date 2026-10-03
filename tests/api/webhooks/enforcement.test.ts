@@ -6,7 +6,7 @@
 import { eq } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { callParticipants, meetings, rooms } from '../../../server/database/schema'
-import { createMeeting, createParticipant, createRoom, createUser, expectApiError, testDb } from '../_harness'
+import { createAdmin, createMeeting, createParticipant, createRoom, createUser, expectApiError, loginAs, testDb } from '../_harness'
 import { openSse } from '../join/_sse'
 import { joinGuest, joinUser, livekitCalls, participantRow, sendWebhook, startMeeting, usesFakeLivekit } from '../rooms/_support'
 
@@ -81,6 +81,60 @@ describe.skipIf(!usesFakeLivekit())('participant_joined enforcement', () => {
     await sendWebhook('participant_joined', room, { identity: member.identity })
     expect((await removedIdentities(room.id)).filter((id) => id === member.identity)).toHaveLength(2)
     expect((await participantRow(member.identity))!.status).toBe('removed')
+  })
+
+  it('takes a full LiveKit reconnect back instead of treating it as a removal (F-039)', async () => {
+    const owner = await createUser()
+    const room = await createRoom(owner, { waitingRoom: false })
+    await startMeeting(room, owner)
+    const guest = await joinGuest(room, { expectStatus: 200 })
+    const first = Date.now() - 30_000
+    // joined(T1) → joined; the network drops: left(T1) → left; the SDK reconnects with the same token: joined(T2).
+    await sendWebhook('participant_joined', room, { identity: guest.identity, joinedAtMs: first })
+    await sendWebhook('participant_left', room, { identity: guest.identity, joinedAtMs: first })
+    expect((await participantRow(guest.identity))!.status).toBe('left')
+    await sendWebhook('participant_joined', room, { identity: guest.identity, joinedAtMs: first + 25_000 })
+    expect(await participantRow(guest.identity)).toMatchObject({
+      status: 'joined',
+      joinedAt: new Date(first + 25_000),
+      leftAt: null,
+    })
+    expect(await removedIdentities(room.id)).not.toContain(guest.identity)
+    // The new connection's own left still closes the row.
+    await sendWebhook('participant_left', room, { identity: guest.identity, joinedAtMs: first + 25_000 })
+    expect((await participantRow(guest.identity))!.status).toBe('left')
+  })
+
+  it('still removes a reconnect after the grace period, and rows closed by a revocation', async () => {
+    const owner = await createUser()
+    const room = await createRoom(owner, { waitingRoom: false })
+    await startMeeting(room, owner)
+    const stale = await joinGuest(room, { expectStatus: 200 })
+    await sendWebhook('participant_joined', room, { identity: stale.identity, joinedAtMs: Date.now() - 600_000 })
+    await sendWebhook('participant_left', room, { identity: stale.identity, joinedAtMs: Date.now() - 600_000 })
+    await testDb()
+      .update(callParticipants)
+      .set({ leftAt: new Date(Date.now() - 121_000) })
+      .where(eq(callParticipants.lkIdentity, stale.identity))
+    await sendWebhook('participant_joined', room, { identity: stale.identity })
+    expect(await removedIdentities(room.id)).toContain(stale.identity)
+    expect((await participantRow(stale.identity))!.status).toBe('left')
+
+    // A user taken out of live calls (disabled, deleted, sessions revoked) cannot come back over LiveKit.
+    const member = await joinUser(room, { expectStatus: 200 })
+    await sendWebhook('participant_joined', room, { identity: member.identity })
+    const admin = await loginAs(await createAdmin())
+    expect((await admin.post(`/api/admin/users/${member.user!.id}/revoke-sessions`)).status).toBe(204)
+    // The removal runs on the event bus, right after the answer.
+    for (let i = 0; i < 50 && (await participantRow(member.identity))!.status !== 'left'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    expect((await participantRow(member.identity))!.status).toBe('left')
+    const removals = async () => (await removedIdentities(room.id)).filter((id) => id === member.identity).length
+    const before = await removals()
+    await sendWebhook('participant_joined', room, { identity: member.identity })
+    expect(await removals()).toBe(before + 1)
+    expect((await participantRow(member.identity))!.status).toBe('left')
   })
 })
 

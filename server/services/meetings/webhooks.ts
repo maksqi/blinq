@@ -4,24 +4,28 @@
  *
  * - `participant_joined` is the enforcement backstop for leaked or stale tokens: an identity whose row is not
  *   `admitted`/`joined` in the room's live meeting (unknown identities, removed, denied, left, older meetings, deleted
- *   rooms) is removed at once, with its tokens revoked. An admitted row becomes `joined` (with LiveKit's join time,
- *   which identifies the connection), the meeting's peak count is updated, and the row's current name, attributes and
- *   permissions are pushed (they may have changed after the token was minted).
+ *   rooms) is removed at once, with its tokens revoked (`joinVerdict`, enforcement.ts). The one exception is a full
+ *   LiveKit reconnect (F-039): a row that left after its own connection less than `RESUME_GRACE_MS` ago is taken
+ *   back. An accepted row becomes `joined` (with LiveKit's join time, which identifies the connection), the meeting's
+ *   peak count is updated, and the row's current name, attributes and permissions are pushed (they may have changed
+ *   after the token was minted).
  * - `participant_left` marks the row `left`, unless it belongs to an earlier connection of a resumed row. When the
  *   last connection of a recorder leaves, `recording.changed` is published (recording-server finalizes).
  * - `room_started` records the LiveKit room sid; `room_finished` ends the meeting of that sid.
  * `handleWebhookEvent(event)` deduplicates by event id first.
  */
-import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, count, eq, gte, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import type { WebhookEvent } from 'livekit-server-sdk'
 import { useDb } from '../../database/client'
 import { callParticipants, meetings, recordings } from '../../database/schema'
 import { eventBus } from '../../utils/event-bus'
 import { logger } from '../../utils/logger'
 import { LIVE_STATUSES, pushParticipantState } from '../calls/live'
+import { RESUME_GRACE_MS } from '../join/resume'
 import { roomService } from '../livekit/room-service'
 import { webhookDeduper } from '../livekit/webhook'
 import { findRoomById } from '../rooms/queries'
+import { joinVerdict } from './enforcement'
 import { endMeeting, findLiveMeeting, type ParticipantRow, type RoomRow } from './meetings'
 
 export const ENFORCEMENT_REVOKE_LEEWAY_MS = 60_000
@@ -53,23 +57,32 @@ async function onParticipantJoined(room: RoomRow, participant: WebhookParticipan
   const db = useDb()
   const meeting = await findLiveMeeting(db, room.id)
   const [row] = await db.select().from(callParticipants).where(eq(callParticipants.lkIdentity, identity)).limit(1)
-  const reason = !row
-    ? 'unknown identity'
-    : row.roomId !== room.id
-      ? 'other room'
-      : room.deletedAt
-        ? 'room deleted'
-        : !meeting || row.meetingId !== meeting.id
-          ? 'not in the live meeting'
-          : !isLive(row)
-            ? `status ${row.status}`
-            : null
-  if (reason || !row || !meeting) return enforceRemoval(room, identity, now, reason ?? 'no meeting')
+  const verdict = joinVerdict(row, {
+    roomId: room.id,
+    roomDeleted: room.deletedAt !== null,
+    liveMeetingId: meeting?.id ?? null,
+    now,
+  })
+  if (!verdict.accept || !row || !meeting) {
+    return enforceRemoval(room, identity, now, verdict.accept ? 'no meeting' : verdict.reason)
+  }
+  if (verdict.reconnect) logger.info('LiveKit participant reconnected', { roomId: room.id, identity })
 
+  // The row may have changed since it was read: only a still live (or still reconnectable) row is taken.
+  const reconnectableAgain = and(
+    eq(callParticipants.status, 'left'),
+    isNotNull(callParticipants.joinedAt),
+    gte(callParticipants.leftAt, new Date(now.getTime() - RESUME_GRACE_MS)),
+  )
   const [joined] = await db
     .update(callParticipants)
-    .set({ status: 'joined', joinedAt: joinedAtOf(participant) ?? now })
-    .where(and(eq(callParticipants.id, row.id), inArray(callParticipants.status, [...LIVE_STATUSES])))
+    .set({ status: 'joined', joinedAt: joinedAtOf(participant) ?? now, leftAt: null })
+    .where(
+      and(
+        eq(callParticipants.id, row.id),
+        or(inArray(callParticipants.status, [...LIVE_STATUSES]), verdict.reconnect ? reconnectableAgain : undefined),
+      ),
+    )
     .returning()
   if (!joined) return enforceRemoval(room, identity, now, 'status changed')
 
