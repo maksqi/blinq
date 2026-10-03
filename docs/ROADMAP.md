@@ -234,3 +234,8 @@ tracked as F-001 to F-011 in the Stage 10 Findings list):
   Firefox), smoke-prod with a fresh docker build (passed). Two CI blockers fixed on main (26b9e8c): F-012 (a JSDoc
   comment put `__blinqTest` into the production SSR bundle) and F-013 (gitleaks false positives in tests). Stages 04,
   06, 07 and 08 done; Stage 01 and 06 DoD ticked with the gate evidence.
+- 2026-10-03 — W3 reviews done. security-review: 1 high (E2EE decrypt flag per participant in livekit-client), 6
+  medium, 11 low; quality-review: 1 high (devices opened after dispose), 9 medium, 6 low. All are F-012 to F-050 in the
+  Stage 10 Findings list. Orchestrator fixes on main: F-010, F-012, F-013, F-021 (audit exceptions), F-027 (accepted),
+  F-040 (indexes, migration 0001_w3_indexes), API.md drift; e2e Caddy compresses like production. Fix agents started:
+  fix-server (3005), fix-call (3003), fix-ui (3002).

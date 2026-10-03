@@ -89,7 +89,7 @@ export const roomInvites = pgTable(
     revokedAt: tstz(),
     createdAt: createdAt(),
   },
-  (t) => [index('room_invites_room_idx').on(t.roomId)],
+  (t) => [index('room_invites_room_idx').on(t.roomId), index('room_invites_created_by_idx').on(t.createdBy)],
 )
 
 /** Guests (no account). `id` is sha256(token); the token lives in the per-room cookie `__Host-blinq_g_<slug>`. */
@@ -182,5 +182,9 @@ export const callParticipants = pgTable(
     index('call_participants_meeting_idx').on(t.meetingId),
     index('call_participants_user_idx').on(t.userId),
     index('call_participants_guest_idx').on(t.guestSessionId),
+    // The stale-waiting sweep runs every minute over the few waiting rows only.
+    index('call_participants_waiting_idx')
+      .on(t.requestedAt)
+      .where(sql`${t.status} = 'waiting'`),
   ],
 )

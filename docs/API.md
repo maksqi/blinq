@@ -13,8 +13,8 @@ review.
 - **Body size**: 1 MB (Caddy and nuxt-security). `/api/recordings/**` allows 20 MB; the chunk handler enforces
   `RECORDING_CHUNK_MAX_BYTES` (16 MiB) while streaming.
 - **Types** below are TypeScript-style and use the names exported from `shared/schemas/*`. `Id` = uuid string,
-  `IsoDate` = ISO 8601 string with offset, `B64u` = base64url without padding. Request schemas are strict objects
-  parsed with `readValidatedBody(event, schema.parse)`.
+  `IsoDate` = ISO 8601 string with offset, `B64u` = base64url without padding. Request schemas are zod objects
+  parsed with `readValidatedBody(event, schema.parse)`; unknown keys are stripped, never stored.
 - **Pagination**: list endpoints take `?page=1&pageSize=25&q=` (`paginationQuerySchema`: page ≥ 1, pageSize 1..100,
   default 25, `q` ≤ 200 chars) and return `Paginated<T> = { items: T[]; page: number; pageSize: number; total: number }`.
 - **Timestamps** are UTC ISO strings; durations are milliseconds.
@@ -74,6 +74,10 @@ type ApiErrorBody = { statusCode: number; statusMessage: string; data: { code: E
 
 `CONFLICT` uses `details.reason` for specifics: `last_admin`, `self`, `slug_taken`, `email_taken`, `already_cohost`,
 `not_recording`, `not_live` (decision).
+
+Framework errors keep their HTTP status and get the closest generic code: 405 → `NOT_FOUND`; 413 (body over the size
+limit), 415 and 416 → `VALIDATION_FAILED`. `SERVICE_UNAVAILABLE` 503 also answers any call that needs LiveKit while it
+is unreachable (join, in-call actions, recording start and upload).
 
 ## 2. Public
 
@@ -290,8 +294,9 @@ admin playback or download is audited.
 
 Upload protocol details: `seq` counts from 0 with one request in flight; resending a `seq` replaces it. `CONFLICT`
 reasons: `not_recording` (stop uploading), `chunk_gap` (resend from `details.expected`), `chunk_count_mismatch`
-(`details.stored`), `recording_busy` (another recording is active). Unknown recording ids answer 403 on the chunk and
-complete routes. `416` responses carry `Content-Range: bytes */<size>`. `sizeBytes` is null until the recording is
+(`details.stored`), `recording_busy` (another recording is active; `DELETE` answers it too while the recording is
+still recording or processing). Unknown recording ids answer 403 on the chunk and complete routes. An unsatisfiable
+range answers 416 `VALIDATION_FAILED` (`reason: range_not_satisfiable`) with `Content-Range: bytes */<size>`. `sizeBytes` is null until the recording is
 ready. Stop answers `RECORDING_NOT_ALLOWED` for guests and participants; stop only ends the indicator, chunks are still
 accepted until `complete`.
 

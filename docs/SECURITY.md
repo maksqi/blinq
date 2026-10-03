@@ -212,6 +212,10 @@ All derivations use HKDF-SHA256 via WebCrypto. The exact info strings are in [`A
     - always a re-encode to H.264/AAC.
   - The ffmpeg process gets a PATH-only environment (no secrets), a hard timeout with SIGKILL, `nice`, and
     container limits.
+  - Accepted risk: ffmpeg runs as the app's own uid, because the container drops every capability and sets
+    `no-new-privileges`, so it cannot switch users. Code execution through an ffmpeg demuxer bug could therefore read
+    the app's environment from `/proc`. The input comes only from signed-in hosts and co-hosts and passes the ffprobe
+    allowlist first; keep ffmpeg current (the pinned `mwader/static-ffmpeg` image).
 - **Serving:**
   - Always `Content-Type: video/mp4`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox;
     default-src 'none'`, `Cache-Control: no-store` and an RFC 5987 filename.

@@ -145,8 +145,8 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       already null); the admin service works around it in `beforeDelete` — owner: fix-server — status: open
 - [ ] F-002 [low] server — 404 error responses carry `cache-control: no-cache` (Nitro error handler), not the documented
       `no-store` — owner: fix-server — status: open
-- [ ] F-003 [low] admin — the overview counts live meetings from the first 100 rooms only ("100+") — owner: admin —
-      status: open
+- [x] F-003 [low] admin — the overview counts live meetings from the first 100 rooms only ("100+") — owner: admin —
+      status: accepted (the overview says "100+" beyond 100 rooms; a counts endpoint is a feature, backlog)
 - [x] F-004 [low] ci — nightly.yml runs `--project=msedge`, which `playwright.config.ts` did not define — owner:
       orchestrator — status: fixed (W3 kickoff, `E2E_NIGHTLY_BROWSERS=1`)
 - [ ] F-005 [medium] call — `LocalMedia` ignores server-side mutes, so the local toggles stay "on" after a host mute;
@@ -155,8 +155,8 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       status: open
 - [ ] F-007 [low] call — participant-side dialogs live in a zero-footprint `start` control-bar item; no always-mounted
       overlay slot in `CallFeature` — owner: orchestrator (contract) + fix-call — status: open
-- [ ] F-008 [low] rooms — co-hosts can only be promoted during a call (no user lookup for non-admins) — owner:
-      orchestrator — status: open
+- [x] F-008 [low] rooms — co-hosts can only be promoted during a call (no user lookup for non-admins) — owner:
+      orchestrator — status: accepted (a user lookup for non-admins would reveal accounts; co-hosts are promoted during a call, backlog)
 - [ ] F-009 [low] recording — local-only file names use the slug; the room name is not in `CallContext` — owner:
       orchestrator (contract) + fix-call — status: open
 - [x] F-010 [low] media — `/vendor/mediapipe/*.tflite` is served as `text/plain` (with `nosniff`) — owner:
@@ -201,8 +201,9 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       `Content-Length` only) (S-12) — owner: fix-server — status: open
 - [ ] F-026 [low] server — the room-password backoff has the same race as login (25 parallel guesses evaluated) (S-13)
       — owner: fix-server — status: open
-- [ ] F-027 [low] infra — ffmpeg runs as the app uid and could read the app's `/proc/<pid>/environ` after an ffmpeg
-      exploit (S-14) — owner: orchestrator — status: open
+- [x] F-027 [low] infra — ffmpeg runs as the app uid and could read the app's `/proc/<pid>/environ` after an ffmpeg
+      exploit (S-14) — owner: orchestrator — status: accepted (no capability to switch uid; signed-in input behind the
+      ffprobe allowlist; documented in SECURITY.md §6)
 - [ ] F-028 [low] server — `/api/**` responses carry no `Cross-Origin-Resource-Policy` (S-15) — owner: fix-server —
       status: open
 - [ ] F-029 [low] ui — the key vault survives an expired session (cleared only when a previous user was known; no 401
@@ -219,6 +220,47 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       (SECURITY.md "manage co-hosts" means promoting and demoting, which stays host-only)
 - [x] F-035 [low] server — an invited guest can fill the 50-slot lobby for an hour; there is no deny-all — owner:
       orchestrator — status: accepted (hosts lock the room or revoke the invite; deny-all is a feature, backlog)
+- [ ] F-036 [high] call — a camera or mic that finishes opening after leave/dispose is never stopped
+      (`app/lib/livekit/local-media.ts:84-110,240-256`; `dispose` does not drain the queues): the camera light stays on
+      (quality-review) — owner: fix-call — status: open
+- [ ] F-037 [medium] call — the heap grows ~1.3 MB per join/leave in one tab: livekit-client's WeakRef
+      `onDeviceChange` closure keeps every `Room`, and @tanstack/vue-form drops `formApi.mount()`'s cleanup so form
+      devtools listeners keep the component and the `CallSession` — owner: fix-call (patches) — status: open
+- [ ] F-038 [medium] ui — join error screens keep the preview session (camera, mic, Room, E2EE worker) alive
+      (`app/composables/rooms/useJoinFlow.ts:99-107`) — owner: fix-ui — status: open
+- [ ] F-039 [medium] server — a LiveKit full reconnect (left on the old session, joined on the new one) is enforced as
+      a removal (`server/services/meetings/webhooks.ts:62-103`) — owner: fix-server — status: open
+- [x] F-040 [medium] db — `recordings.meeting_id` has no index (deleting a user with 5000 meetings takes 4.5 s vs
+      68 ms); `room_invites.created_by`, `user_invites.created_by/used_by` are unindexed FKs; no partial index for the
+      stale-waiting sweep or `recordings.started_at` — owner: orchestrator — status: fixed 55a129b (migration 0001_w3_indexes)
+- [ ] F-041 [medium] call — `startPreview` and `watchDevices` continue after dispose and add a `devicechange` listener
+      that keeps the session alive (`app/lib/call/session.ts:270-279,997-1002`) — owner: fix-call — status: open
+- [ ] F-042 [medium] call — unhandled promise rejections from the hotkeys and pre-join toggles (`CallView.vue:89-98`,
+      `PreJoin.vue:163,172`) — owner: fix-call — status: open
+- [ ] F-043 [medium] perf — initial JS is over the Stage 10 budget (gzip: `/` 222 KiB, `/login` 225 KiB, `/m/<slug>`
+      no-key screen 464 KiB); one 814 KB chunk with livekit-client and all call code loads even on error screens —
+      owner: fix-ui (pages, entry) + fix-call (call chunk) — status: open
+- [ ] F-044 [medium] api — drift: request schemas strip unknown keys (API.md says strict); 503 `SERVICE_UNAVAILABLE`
+      is undocumented and the join screen shows it as unknown; `VALIDATION_FAILED` with status 416; 413/415 normalized
+      to `VALIDATION_FAILED`; `recording_busy` documented under upload but thrown by DELETE — owner: orchestrator
+      (docs) + fix-server + fix-ui — status: open
+- [ ] F-045 [medium] ui — copy: many `ERROR_MESSAGES` give no next step (`shared/utils/error-codes/index.ts`); one
+      setting is labeled "Hosts only" in the call and "Hosts and co-hosts" on the room page — owner: fix-ui (+ fix-call
+      label) — status: open
+- [ ] F-046 [low] server — LiveKit `createRoom`/`deleteRoom` run inside the room-lock transaction (pool max 10);
+      `GET /lobby` writes; (unconfirmed) demoting a co-host does not stop their screen share under the "hosts" policy —
+      owner: fix-server — status: open
+- [ ] F-047 [low] server — bare clocks in `settings.ts`, `recordings/processor.ts`, `auth/providers/identity.ts`,
+      `utils/cookies.ts` — owner: fix-server — status: open
+- [x] F-048 [low] server — the dashboard room list (`OR`) and own-recordings list plus count use seq scans at volume
+      (5–16 ms at 60k rooms) — owner: orchestrator (indexes, with F-040) — status: accepted (5–16 ms at 60k rooms; `recordings.started_at` indexed in 0001_w3_indexes)
+- [ ] F-049 [low] client — a BroadcastChannel can open after dispose (`useJoinFlow.ts:156-162`); `MicChain.destroy`
+      does not stop `processedTrack`; recording uploads retry forever after unmount; livekit's iOS `visibilitychange`
+      listener is never removed (upstream) — owner: fix-ui + fix-call — status: open
+- [ ] F-050 [low] code — dead code (`RECORDING_INVALID_MEDIA`, `notImplemented()`, hint `room.changed`,
+      `hasModerationMenu`, `bytesEqual`, `queuePosition`, `displayedSetting`) and duplicates (UUID regex ×8,
+      `likePattern` ×5, moderator check ×3, server forks of `StreamEvent` and the settings patch schema) — owner:
+      fix-server + fix-call + fix-ui (dead code); duplicates accepted for v1 — status: open
 
 ## Tests
 - API: `tests/api/security/{authz-matrix,idor,csrf,rate-limits,cookies,headers}.test.ts`.

@@ -51,5 +51,8 @@ export const recordings = pgTable(
     index('recordings_created_by_idx').on(t.createdBy),
     index('recordings_status_idx').on(t.status),
     index('recordings_expires_idx').on(t.expiresAt),
+    // FK `meeting_id ON DELETE SET NULL`: without it every deleted meeting scans recordings (Stage 10, F-040).
+    index('recordings_meeting_idx').on(t.meetingId),
+    index('recordings_started_at_idx').on(t.startedAt),
   ],
 )

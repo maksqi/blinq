@@ -79,7 +79,12 @@ export const userInvites = pgTable(
     revokedAt: tstz(),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex('user_invites_token_hash_unique').on(t.tokenHash)],
+  (t) => [
+    uniqueIndex('user_invites_token_hash_unique').on(t.tokenHash),
+    // FKs with ON DELETE SET NULL: deleting a user must not scan every invite.
+    index('user_invites_created_by_idx').on(t.createdBy),
+    index('user_invites_used_by_idx').on(t.usedBy),
+  ],
 )
 
 export const emailTokenPurpose = pgEnum('email_token_purpose', ['verify_email', 'reset_password'])
