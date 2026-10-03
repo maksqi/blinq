@@ -10,7 +10,7 @@ import { useDb } from '../../database/client'
 import { connectWithRetry } from '../../database/migrate'
 import { authIdentities, users } from '../../database/schema'
 import { env } from '../../utils/env'
-import { clearLoginFailures, emailThrottleKey } from '../../utils/limiter'
+import { clearAccountThrottle } from '../../utils/limiter'
 import { checkPasswordPolicy, hashPassword } from '../../utils/password'
 import { audit } from '../audit/audit'
 import { PromptAbortedError, readPassword } from './read-password'
@@ -60,7 +60,7 @@ export async function resetPassword(email: string, password: string, now: Date =
   })
 
   const revokedSessions = await revokeAllForUser(user.id)
-  await clearLoginFailures([emailThrottleKey(address)])
+  await clearAccountThrottle(address)
   return { userId: user.id, revokedSessions, disabled: user.disabledAt !== null }
 }
 

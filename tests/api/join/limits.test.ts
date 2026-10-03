@@ -107,6 +107,23 @@ describe('room password', () => {
     expect((await join(createClient({ ip: uniqueIp() }), room, { inviteToken: invite.token, displayName: 'G', password: 'correct horse' })).status).toBe(200)
     expect((await join(await loginAs(owner), room)).status).toBe(200)
   })
+
+  it('counts parallel guesses before checking them: 25 at once give 6 wrong-password answers (F-026)', async () => {
+    const room = await createRoom(await createUser(), { password: 'correct horse', waitingRoom: false })
+    const invite = await createRoomInvite(room)
+    const api = createClient({ ip: uniqueIp() })
+    const results = await Promise.all(
+      Array.from({ length: 25 }, () => join(api, room, { inviteToken: invite.token, displayName: 'G', password: 'wrong' })),
+    )
+    const statuses = results.map((res) => res.status)
+    expect(statuses.filter((status) => status === 403)).toHaveLength(6)
+    expect(statuses.filter((status) => status === 429)).toHaveLength(19)
+    for (const res of results.filter((r) => r.status === 403)) expectApiError(res, 403, 'ROOM_PASSWORD_INVALID')
+    for (const res of results.filter((r) => r.status === 429)) {
+      expectApiError(res, 429, 'RATE_LIMITED')
+      expect(Number(res.headers.get('retry-after'))).toBeGreaterThanOrEqual(1)
+    }
+  })
 })
 
 describe('removed and denied are final for the meeting', () => {

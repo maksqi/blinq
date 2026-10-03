@@ -3,10 +3,10 @@
  *
  * - `getJoinInfo(event, slug, input)` → `JoinInfo`: checks the proof and a supplied invite (never consumes it).
  * - `joinRoom(event, slug, input)` → `{ status: 200, body: JoinGrant }` or `{ status: 202, body: JoinWaiting }`.
- *   Order (checks.ts): proof → resume → invite → guests allowed → lock → password → removed/denied in the live
- *   meeting → capacity → waiting room. Everything from the removed/denied check on runs under the room lock, together
- *   with the invite use, the guest session, meeting creation (first admitted join: epoch + LiveKit room) and the row
- *   insert, so concurrent joins can neither exceed limits nor start two meetings.
+ *   Order (checks.ts): proof → resume → invite → guests allowed → lock → password (backoff reserved before the check)
+ *   → removed/denied in the live meeting → capacity → waiting room. Everything from the removed/denied check on runs
+ *   under the room lock, together with the invite use, the guest session, meeting creation (first admitted join:
+ *   epoch + LiveKit room) and the row insert, so concurrent joins can neither exceed limits nor start two meetings.
  * - `proofMatches(room, proof)`: `sha256(proof)` against `join_proof_hash` in constant time (`hashToken` stores the
  *   hex digest of the base64url proof exactly as sent, like every other token).
  * A wrong proof reveals nothing about the room (403 `ROOM_KEY_INVALID`); unknown or deleted slugs are 404.
@@ -24,10 +24,10 @@ import { getClientIp, limiterKeysForIp } from '../../utils/client-ip'
 import { setGuestCookie } from '../../utils/cookies'
 import { hashToken, safeEqual } from '../../utils/crypto'
 import {
-  checkLoginAllowed,
   clearLoginFailures,
   consumeOr429,
-  recordLoginFailure,
+  refundAttempt,
+  reserveAttempt,
   roomPasswordThrottleKey,
   throwRateLimited,
 } from '../../utils/limiter'
@@ -148,12 +148,17 @@ async function tryResume(
 async function checkRoomPassword(event: H3Event, room: RoomRow, password: string | undefined, now: Date): Promise<void> {
   if (!password) throw apiError('ROOM_PASSWORD_REQUIRED', 403)
   const key = roomPasswordThrottleKey(room.id, getClientIp(event))
-  const decision = await checkLoginAllowed([key], now)
+  // Reserved before the check (counted as a failure up front), so parallel guesses see each other (F-026).
+  const decision = await reserveAttempt([{ key }], now)
   if (!decision.allowed) throwRateLimited(event, decision.retryAfterMs)
-  if (!(await verifyPassword(room.passwordHash!, password))) {
-    await recordLoginFailure([key], now)
-    throw apiError('ROOM_PASSWORD_INVALID', 403)
+  let verified: boolean
+  try {
+    verified = await verifyPassword(room.passwordHash!, password)
+  } catch (error) {
+    await refundAttempt(decision.reservation)
+    throw error
   }
+  if (!verified) throw apiError('ROOM_PASSWORD_INVALID', 403)
   await clearLoginFailures([key])
 }
 
@@ -170,7 +175,6 @@ async function finalStatuses(tx: Tx, meetingId: string, who: Who): Promise<strin
     )
   return rows.map((row) => row.status)
 }
-
 async function countRows(tx: Tx, where: ReturnType<typeof and>): Promise<number> {
   const [row] = await tx.select({ value: count() }).from(callParticipants).where(where)
   return row?.value ?? 0

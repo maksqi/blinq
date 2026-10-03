@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSemaphore } from './semaphore'
+import { createSemaphore, SemaphoreFullError } from './semaphore'
 
 function deferred() {
   let resolve!: () => void
@@ -47,5 +47,27 @@ describe('createSemaphore', () => {
   it('rejects invalid sizes', () => {
     expect(() => createSemaphore(0)).toThrow(RangeError)
     expect(() => createSemaphore(1.5)).toThrow(RangeError)
+    expect(() => createSemaphore(1, { maxWaiting: -1 })).toThrow(RangeError)
+  })
+
+  it('refuses new work at once when maxWaiting tasks already wait (F-016)', async () => {
+    const semaphore = createSemaphore(1, { maxWaiting: 2 })
+    const gate = deferred()
+    const runs = [0, 1, 2].map((i) =>
+      semaphore.run(async () => {
+        await gate.promise
+        return i
+      }),
+    )
+    await Promise.resolve()
+    expect(semaphore.active).toBe(1)
+    expect(semaphore.waiting).toBe(2)
+    await expect(semaphore.run(() => Promise.resolve('late'))).rejects.toBeInstanceOf(SemaphoreFullError)
+    expect(semaphore.waiting).toBe(2) // the refused task never queued
+
+    gate.resolve()
+    expect(await Promise.all(runs)).toEqual([0, 1, 2])
+    expect(await semaphore.run(() => Promise.resolve('again'))).toBe('again')
+    expect(semaphore.active).toBe(0)
   })
 })

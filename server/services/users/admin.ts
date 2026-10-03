@@ -46,7 +46,7 @@ import { apiError } from '../../utils/api-error'
 import { setSessionCookie } from '../../utils/cookies'
 import { getAuth } from '../../utils/auth'
 import { eventBus } from '../../utils/event-bus'
-import { clearLoginFailures, emailThrottleKey } from '../../utils/limiter'
+import { clearAccountThrottle } from '../../utils/limiter'
 import { hashPassword } from '../../utils/password'
 import { audit } from '../audit/audit'
 import { tempPasswordMessage } from '../mail/messages'
@@ -293,7 +293,7 @@ export async function resetPasswordByAdmin(
     return updated
   })
   await revokeAllForUser(id)
-  await clearLoginFailures([emailThrottleKey(row.email)])
+  await clearAccountThrottle(row.email)
   return { tempPassword: sendEmail ? null : tempPassword, emailed: sendEmail }
 }
 

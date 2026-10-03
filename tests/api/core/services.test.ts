@@ -29,11 +29,12 @@ import {
 } from '../../../server/services/settings/settings'
 import { hashToken, randomToken } from '../../../server/utils/crypto'
 import {
-  checkLoginAllowed,
+  clearAccountThrottle,
   clearLoginFailures,
   emailThrottleKey,
-  loginThrottleKeys,
-  recordLoginFailure,
+  loginAttemptKeys,
+  refundAttempt,
+  reserveAttempt,
 } from '../../../server/utils/limiter'
 import {
   createAdmin,
@@ -58,35 +59,69 @@ const DAY = 24 * 3_600_000
 const ago = (ms: number) => new Date(Date.now() - ms)
 
 describe('login backoff (login_throttle)', () => {
-  it('allows 5 failures, then waits 2^(n-5) s per key; success clears only the email key', async () => {
-    const email = uniqueEmail()
-    const keys = loginThrottleKeys(email, uniqueIp())
+  const rowOf = async (key: string) => (await testDb().select().from(loginThrottle).where(eq(loginThrottle.key, key)))[0]
+
+  it('reserves 5 free attempts, then waits 2^(n-5) s; refused attempts are not counted', async () => {
+    const keys = [{ key: emailThrottleKey(uniqueEmail()) }]
     const now = new Date()
-    for (let i = 0; i < 5; i++) await recordLoginFailure(keys, now)
-    expect(await checkLoginAllowed(keys, now)).toEqual({ allowed: true, retryAfterMs: 0 })
-
-    await recordLoginFailure(keys, now)
-    expect(await checkLoginAllowed(keys, now)).toEqual({ allowed: false, retryAfterMs: 2_000 })
-    await recordLoginFailure(keys, now)
-    expect(await checkLoginAllowed(keys, now)).toEqual({ allowed: false, retryAfterMs: 4_000 })
-    expect((await checkLoginAllowed(keys, new Date(now.getTime() + 4_000))).allowed).toBe(true)
-
-    await clearLoginFailures([emailThrottleKey(email)])
-    expect((await checkLoginAllowed(keys, now)).allowed).toBe(false) // the IP key still counts
-    await clearLoginFailures(keys)
-    expect((await checkLoginAllowed(keys, now)).allowed).toBe(true)
+    for (let i = 0; i < 6; i++) expect((await reserveAttempt(keys, now)).allowed).toBe(true)
+    expect(await reserveAttempt(keys, now)).toEqual({ allowed: false, retryAfterMs: 2_000 })
+    expect((await rowOf(keys[0]!.key))!.failures).toBe(6)
+    const later = new Date(now.getTime() + 2_000)
+    expect((await reserveAttempt(keys, later)).allowed).toBe(true)
+    expect(await reserveAttempt(keys, later)).toEqual({ allowed: false, retryAfterMs: 4_000 })
+    await clearLoginFailures(keys.map((spec) => spec.key))
+    expect(await rowOf(keys[0]!.key)).toBeUndefined()
   })
 
-  it('counts parallel failures exactly and forgets failures older than 24 h', async () => {
+  it('serializes parallel attempts: 40 at once reserve exactly 6 (F-016)', async () => {
+    const keys = loginAttemptKeys(uniqueEmail(), uniqueIp())
+    const results = await Promise.all(Array.from({ length: 40 }, () => reserveAttempt(keys)))
+    expect(results.filter((result) => result.allowed)).toHaveLength(6)
+    for (const spec of keys) expect((await rowOf(spec.key))!.failures).toBe(6)
+    await clearLoginFailures(keys.map((spec) => spec.key))
+  })
+
+  it('refunds an attempt: the wait it started and the row age come back, empty rows go', async () => {
+    const network = { key: `ip:${uniqueIp(4)}-${randomBytes(4).toString('hex')}` }
+    const start = ago(3_600_000)
+    for (let i = 0; i < 5; i++) await reserveAttempt([network], start)
+    const before = await rowOf(network.key)
+    const decision = await reserveAttempt([network])
+    expect(decision.allowed).toBe(true)
+    expect((await rowOf(network.key))!.nextAllowedAt).not.toBeNull() // the 6th would start a wait
+    if (decision.allowed) await refundAttempt(decision.reservation)
+    expect(await rowOf(network.key)).toEqual(before)
+
+    const fresh = { key: `ip:${randomBytes(8).toString('hex')}` }
+    const once = await reserveAttempt([fresh])
+    if (once.allowed) await refundAttempt(once.reservation)
+    expect(await rowOf(fresh.key)).toBeUndefined()
+    await clearLoginFailures([network.key])
+  })
+
+  it('forgets failures older than 24 h', async () => {
     const key = emailThrottleKey(uniqueEmail())
-    await Promise.all(Array.from({ length: 8 }, () => recordLoginFailure([key])))
-    const [row] = await testDb().select().from(loginThrottle).where(eq(loginThrottle.key, key))
-    expect(row!.failures).toBe(8)
+    for (let i = 0; i < 3; i++) await reserveAttempt([{ key }])
     await testDb().update(loginThrottle).set({ updatedAt: ago(25 * 3_600_000) }).where(eq(loginThrottle.key, key))
-    await recordLoginFailure([key])
-    const [reset] = await testDb().select().from(loginThrottle).where(eq(loginThrottle.key, key))
-    expect(reset!.failures).toBe(1)
+    await reserveAttempt([{ key }])
+    expect((await rowOf(key))!.failures).toBe(1)
     await clearLoginFailures([key])
+  })
+
+  it('clears an account: its email key and network pair keys, not the network keys', async () => {
+    const email = `under_score%${uniqueEmail()}`
+    const keys = loginAttemptKeys(email, uniqueIp())
+    const lookalike = loginAttemptKeys(`underXscoreX${email.slice('under_score%'.length)}`, uniqueIp())
+    await reserveAttempt(keys)
+    await reserveAttempt(lookalike)
+    await clearAccountThrottle(email)
+    expect(await rowOf(keys[0]!.key)).toBeDefined()
+    expect(await rowOf(keys[1]!.key)).toBeUndefined()
+    expect(await rowOf(keys[2]!.key)).toBeUndefined()
+    // LIKE wildcards in the address are escaped.
+    for (const spec of lookalike) expect(await rowOf(spec.key)).toBeDefined()
+    await clearLoginFailures([...keys, ...lookalike].map((spec) => spec.key))
   })
 })
 
