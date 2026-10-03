@@ -11,26 +11,21 @@ function recordingSteps(failAt?: keyof UserCleanupSteps) {
   }
   const steps: UserCleanupSteps = {
     endMeetingsOfOwner: step('endMeetingsOfOwner'),
-    removeUserFromLiveCalls: step('removeUserFromLiveCalls'),
     deleteRecordingsForUser: step('deleteRecordingsForUser'),
   }
   return { calls, steps }
 }
 
 describe('cleanupBeforeUserDelete', () => {
-  it('ends meetings, leaves live calls, then deletes recording files', async () => {
+  it('ends meetings, then deletes recording files (the users service already left live calls, F-001)', async () => {
     const { calls, steps } = recordingSteps()
     await cleanupBeforeUserDelete(USER, steps)
-    expect(calls).toEqual([
-      `endMeetingsOfOwner:${USER}`,
-      `removeUserFromLiveCalls:${USER}`,
-      `deleteRecordingsForUser:${USER}`,
-    ])
+    expect(calls).toEqual([`endMeetingsOfOwner:${USER}`, `deleteRecordingsForUser:${USER}`])
   })
 
   it('stops at the first failure so the account is not deleted half-cleaned', async () => {
-    const { calls, steps } = recordingSteps('removeUserFromLiveCalls')
-    await expect(cleanupBeforeUserDelete(USER, steps)).rejects.toThrow('removeUserFromLiveCalls failed')
-    expect(calls).toEqual([`endMeetingsOfOwner:${USER}`, `removeUserFromLiveCalls:${USER}`])
+    const { calls, steps } = recordingSteps('endMeetingsOfOwner')
+    await expect(cleanupBeforeUserDelete(USER, steps)).rejects.toThrow('endMeetingsOfOwner failed')
+    expect(calls).toEqual([`endMeetingsOfOwner:${USER}`])
   })
 })

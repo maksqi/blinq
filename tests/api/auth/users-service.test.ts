@@ -3,10 +3,10 @@
  * accounts with temporary passwords, updates (rename, disable, role change with session rotation), admin resets,
  * session revocation, deletion, listing. Last-admin rules run on their own database: tests/api/auth/last-admin.test.ts.
  */
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { H3Error } from 'h3'
 import { describe, expect, it } from 'vitest'
-import { loginThrottle, sessions, users } from '../../../server/database/schema'
+import { callParticipants, loginThrottle, sessions, users } from '../../../server/database/schema'
 import { createSession, validateSession } from '../../../server/services/session/sessions'
 import {
   createUserByAdmin,
@@ -27,6 +27,8 @@ import { subscribeTo } from '../../../server/utils/event-bus'
 import {
   createAdmin,
   createClient,
+  createMeeting,
+  createParticipant,
   createRoom,
   createUser,
   fakeEvent,
@@ -256,6 +258,34 @@ describe('revokeUserSessions and deleteUser', () => {
   it('refuses to delete the own account', async () => {
     const admin = await actor()
     expect(await codeOf(deleteUser(admin.id, admin))).toEqual({ code: 'CONFLICT', details: { reason: 'self' } })
+  })
+
+  it('takes the user out of live calls before the row goes, without any cleanup hook (F-001)', async () => {
+    const admin = await actor()
+    const user = await createUser()
+    const room = await createRoom(await createUser())
+    const meeting = await createMeeting(room)
+    const joined = await createParticipant({ room, meeting, userId: user.id, status: 'joined' })
+    const waiting = await createParticipant({ room, meeting, userId: user.id, status: 'waiting' })
+    let statusesWhenRemoved: string[] = []
+    await deleteUser(user.id, admin, {
+      beforeDelete: async () => {
+        // The users service already ran the removal, while the rows still carried the user id.
+        statusesWhenRemoved = (
+          await testDb()
+            .select({ status: callParticipants.status })
+            .from(callParticipants)
+            .where(eq(callParticipants.userId, user.id))
+        ).map((row) => row.status)
+      },
+    })
+    expect(statusesWhenRemoved).toEqual(['left', 'left'])
+    const rows = await testDb()
+      .select({ id: callParticipants.id, status: callParticipants.status, userId: callParticipants.userId })
+      .from(callParticipants)
+      .where(inArray(callParticipants.id, [joined.id, waiting.id]))
+    expect(rows).toHaveLength(2)
+    for (const row of rows) expect(row).toMatchObject({ status: 'left', userId: null })
   })
 })
 
