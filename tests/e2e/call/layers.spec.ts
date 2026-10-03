@@ -2,15 +2,14 @@ import { expect, test } from '../fixtures'
 import { inboundVideo, subscriptions } from '../fixtures/livekit'
 
 // DoD: a small tile receives width ≤ 320 (simulcast layer switching). adaptiveStream is off, so the subscription
-// manager alone picks the layer from the rendered tile size.
+// manager alone picks the layer from the rendered tile size. Both people are on the real meeting page.
 test.describe('simulcast layers', () => {
-  test('follow the tile size: large tile, then a small one', async ({ joinAs }) => {
-    const publisher = await joinAs('participant', { name: 'Pat Publisher' })
-    const viewer = await joinAs('host', {
-      name: 'Vic Viewer',
-      room: publisher.room,
-      viewport: { width: 1280, height: 720 },
-    })
+  test('follow the tile size: large tile, then a small one', async ({ flows }) => {
+    const { host: viewer, room } = await flows.meeting(
+      { name: 'Layers' },
+      { hostName: 'Vic Viewer', viewport: { width: 1280, height: 720 } },
+    )
+    const publisher = await flows.joinAsGuest(room, { name: 'Pat Publisher' })
 
     const camera = async () => (await inboundVideo(viewer.page, publisher.identity))[0]
     const requested = async () =>

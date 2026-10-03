@@ -9,8 +9,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { Browser, BrowserContext, Page } from '@playwright/test'
-import { expect } from '../fixtures'
-import type { Guards } from '../fixtures/base'
+// From base.ts, not the merged fixtures: fixtures/flows.ts imports this module (no import cycle).
+import { expect, type Guards } from '../fixtures/base'
 
 /** Browser console errors of deliberate 4xx answers (negative tests only). */
 export const HTTP_ERROR_CONSOLE = /Failed to load resource: the server responded with a status of 4\d\d/
@@ -108,10 +108,13 @@ export function joinFlow(page: Page) {
   return page.getByTestId('join-flow')
 }
 
-/** Opens a meeting link and waits for the pre-join screen (books the info and the join request). */
+/**
+ * Opens a meeting link and waits for the pre-join screen (books the info and the join request). The pre-join screen is
+ * the readiness signal, not the `load` event: Firefox sometimes never fires `load` on a fully rendered pre-join.
+ */
 export async function openToPrejoin(page: Page, link: string, joinRequests = 2): Promise<void> {
   await spendJoinBudget(joinRequests)
-  await page.goto(link)
+  await page.goto(link, { waitUntil: 'domcontentloaded' })
   await expect(page.getByTestId('prejoin')).toBeVisible({ timeout: 20_000 })
 }
 

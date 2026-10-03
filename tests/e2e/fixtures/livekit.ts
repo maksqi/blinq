@@ -13,7 +13,15 @@
  * Helpers for specs: `callState`, `inboundVideo`, `inboundAudio`, `subscriptions`, `waitForRemoteFrames`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { devices, type Browser, type BrowserContext, type BrowserType, type Page } from '@playwright/test'
+import {
+  devices,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type BrowserType,
+  type Page,
+  type PlaywrightWorkerArgs,
+} from '@playwright/test'
 import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk'
 import { expect, test as base } from './base'
 
@@ -71,14 +79,14 @@ export interface LiveKitFixtures {
 }
 
 // Same media setup as playwright.config.ts (frozen there; duplicated here for the second engine).
-const CHROMIUM_MEDIA_ARGS = [
+export const CHROMIUM_MEDIA_ARGS = [
   '--use-fake-ui-for-media-stream',
   '--use-fake-device-for-media-stream',
   '--auto-select-desktop-capture-source=Entire screen',
   '--auto-accept-this-tab-capture',
   '--autoplay-policy=no-user-gesture-required',
 ]
-const FIREFOX_MEDIA_PREFS = {
+export const FIREFOX_MEDIA_PREFS = {
   'media.navigator.streams.fake': true,
   'media.navigator.permission.disabled': true,
   'permissions.default.camera': 1,
@@ -118,6 +126,22 @@ function publishSources(role: Role): TrackSource[] {
   // "everyone" and their allowances are on (the fixture's default room).
   void role
   return [TrackSource.CAMERA, TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO]
+}
+
+/** Launches `engine` with the same fake-media flags or prefs as its project in playwright.config.ts. */
+export function launchEngine(playwright: PlaywrightWorkerArgs['playwright'], engine: Engine): Promise<Browser> {
+  const type: BrowserType = playwright[engine]
+  return type.launch(engine === 'chromium' ? { args: CHROMIUM_MEDIA_ARGS } : { firefoxUserPrefs: FIREFOX_MEDIA_PREFS })
+}
+
+/**
+ * Context options for a browser of `engine` in a project of `ownEngine`. The test runner applies the project's `use`
+ * options (user agent included) to every context, also in another engine: give a second engine its own desktop
+ * profile, or the SDK takes Firefox for Chrome.
+ */
+export function engineContextOptions(engine: Engine, ownEngine: string): BrowserContextOptions {
+  if (engine === ownEngine) return {}
+  return { ...devices[engine === 'firefox' ? 'Desktop Firefox' : 'Desktop Chrome'] }
 }
 
 function env(name: string, fallback?: string): string {
@@ -179,10 +203,7 @@ export const test = base.extend<LiveKitFixtures>({
       if (engine === ownEngine) return browser
       const existing = launched.get(engine)
       if (existing) return existing
-      const type: BrowserType = playwright[engine]
-      const other = await type.launch(
-        engine === 'chromium' ? { args: CHROMIUM_MEDIA_ARGS } : { firefoxUserPrefs: FIREFOX_MEDIA_PREFS },
-      )
+      const other = await launchEngine(playwright, engine)
       launched.set(engine, other)
       return other
     }
@@ -222,11 +243,8 @@ export const test = base.extend<LiveKitFixtures>({
       } else {
         const engine = options.browser ?? ownEngine
         const target = await browserFor(engine)
-        // The test runner applies the project's `use` options (user agent included) to every context, also in another
-        // engine: give a second engine its own desktop profile, or the SDK takes Firefox for Chrome.
-        const profile = engine === ownEngine ? {} : devices[engine === 'firefox' ? 'Desktop Firefox' : 'Desktop Chrome']
         context = await target.newContext({
-          ...profile,
+          ...engineContextOptions(engine, ownEngine),
           baseURL,
           viewport: options.viewport ?? { width: 1280, height: 720 },
         })

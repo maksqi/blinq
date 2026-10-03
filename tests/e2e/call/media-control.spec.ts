@@ -5,6 +5,9 @@ import { inboundAudio, waitForRemoteFrames, type JoinedPeer } from '../fixtures/
 
 // The MediaControl plug points media-fx uses (Stage 07): a mic insert before the gain stage, browser mic processing
 // and a camera processor all apply to the live call without republishing (the publication sids never change).
+// Stays on the /dev/call harness (decision): the product UI cannot plug in a custom insert or processor, and only the
+// harness exposes the MediaControl and the publication sids (`state.harness`). The UI's own processors (blur, noise
+// suppression) are covered on top of it by tests/e2e/media.
 type Sids = Record<string, string>
 interface HarnessWindow {
   __blinqTest: { state: { harness: { media: MediaControl; publications(): Sids } } }

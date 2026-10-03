@@ -2,15 +2,19 @@ import { expect, test } from '../fixtures'
 import { callState, inboundVideo } from '../fixtures/livekit'
 
 // DoD: a 1920×1080 canvas test source is honored at the preset (default admin limits: h1080fps15, contentHint
-// `detail`). The fake source replaces getDisplayMedia, so the test is deterministic.
+// `detail`). The fake source replaces getDisplayMedia, so the test is deterministic. Both people are on the real
+// meeting page, which takes the media limits from GET /api/config (the admin settings).
 test.describe('screen share', () => {
-  test('a 1920×1080 source reaches the viewer at 1920×1080 and stopping restores the layout', async ({ joinAs }) => {
-    const presenter = await joinAs('host', { name: 'Presenter Pia' })
-    const viewer = await joinAs('participant', {
-      name: 'Viewer Val',
-      room: presenter.room,
-      viewport: { width: 1600, height: 900 },
-    })
+  test('a 1920×1080 source reaches the viewer at 1920×1080 and stopping restores the layout', async ({
+    flows,
+    page,
+  }) => {
+    // The admin settings are at their defaults (admin specs restore what they change).
+    const config = (await (await page.request.get('/api/config')).json()) as { media: Record<string, unknown> }
+    expect(config.media).toMatchObject({ maxScreenShareResolution: '1080p', maxScreenShareFps: 15 })
+
+    const { host: presenter, room } = await flows.meeting({ name: 'Screen share' }, { hostName: 'Presenter Pia' })
+    const viewer = await flows.joinAsGuest(room, { name: 'Viewer Val', viewport: { width: 1600, height: 900 } })
 
     await presenter.page.evaluate(() => {
       const hooks = (window as unknown as { __blinqTest: { useFakeScreenSource?: (enabled: boolean) => void } })

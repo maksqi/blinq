@@ -1,9 +1,11 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from '../fixtures'
-import { callState, type JoinedPeer } from '../fixtures/livekit'
+import type { InCall } from '../fixtures/flows'
+import { callState } from '../fixtures/livekit'
 
-// Hotkeys: M (mic), V (camera), Space (push to talk while muted), ? (help). A Russian layout types U+044C on the M key
-// and U+043C on the V key; the handler falls back to e.code for such letters. Written as \u escapes (check:english).
+// Hotkeys on the real meeting page: M (mic), V (camera), Space (push to talk while muted), ? (help). A Russian layout
+// types U+044C on the M key and U+043C on the V key; the handler falls back to e.code for such letters. Written as \u
+// escapes (check:english).
 const CYRILLIC_ON_KEY_M = '\u044c'
 const CYRILLIC_ON_KEY_V = '\u043c'
 
@@ -18,14 +20,14 @@ async function dispatchKey(page: Page, key: string, code: string) {
   )
 }
 
-async function peerSees(peer: JoinedPeer, identity: string) {
+async function peerSees(peer: InCall, identity: string) {
   return (await callState(peer.page))?.participants.find((p) => p.identity === identity)
 }
 
 test.describe('call hotkeys', () => {
-  test('M, V, Space and ? work, on a Cyrillic layout too, and never in text fields', async ({ joinAs }) => {
-    const host = await joinAs('host', { name: 'Hana Host' })
-    const peer = await joinAs('participant', { name: 'Pete Peer', room: host.room })
+  test('M, V, Space and ? work, on a Cyrillic layout too, and never in text fields', async ({ flows }) => {
+    const { host, room } = await flows.meeting({ name: 'Hotkeys' }, { hostName: 'Hana Host' })
+    const peer = await flows.joinAsGuest(room, { name: 'Pete Peer' })
     const page = host.page
     const mic = page.getByRole('button', { name: 'Microphone', exact: true })
     const camera = page.getByRole('button', { name: 'Camera', exact: true })

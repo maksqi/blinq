@@ -3,7 +3,8 @@ import { expect, test } from '../fixtures'
 import { waitForRemoteFrames } from '../fixtures/livekit'
 
 // DoD: no horizontal overflow and the control bar stays in the viewport at 375, 768 and 1440 px (also in the
-// mobile-chromium project through the @responsive tag).
+// mobile-chromium project through the @responsive tag). The host uses the test's own page on the real meeting page,
+// so the project's device emulation applies.
 const WIDTHS = [375, 768, 1440]
 
 async function horizontalOverflow(page: Page): Promise<number> {
@@ -12,18 +13,20 @@ async function horizontalOverflow(page: Page): Promise<number> {
 
 test.describe('responsive call UI', { tag: '@responsive' }, () => {
   for (const width of WIDTHS) {
-    test(`pre-join and call fit at ${width}px`, async ({ joinAs, page }) => {
+    test(`pre-join and call fit at ${width}px`, async ({ flows, page }) => {
       const viewport = { width, height: width < 700 ? 740 : 900 }
-      const host = await joinAs('host', { name: 'Hana Host', page, viewport, join: false })
+      const host = await flows.loginAs('host', { name: 'Hana Host', page, viewport })
+      const room = await flows.createRoom({ name: 'Responsive', waitingRoom: false })
+      await flows.open(host, room.link)
 
       // Pre-join: everything reachable, nothing overflows.
       await expect(page.getByTestId('prejoin-preview')).toBeVisible()
       expect(await horizontalOverflow(page), `pre-join at ${width}px`).toBeLessThanOrEqual(0)
       await page.getByTestId('join-button').scrollIntoViewIfNeeded()
       await expect(page.getByTestId('join-button')).toBeInViewport()
-      await page.getByTestId('join-button').click()
+      await flows.enterCall(host)
 
-      const peer = await joinAs('participant', { name: 'Pete Peer', room: host.room })
+      const peer = await flows.joinAsGuest(room, { name: 'Pete Peer' })
       await waitForRemoteFrames(page, peer.identity, 3)
 
       // In the call: the control bar and its key buttons are fully visible, the grid fits.

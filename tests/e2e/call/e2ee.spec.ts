@@ -1,14 +1,15 @@
 import { expect, test } from '../fixtures'
-import { callState, inboundAudio, waitForRemoteFrames, type JoinedPeer } from '../fixtures/livekit'
+import { otherEngine, type InCall } from '../fixtures/flows'
+import { callState, inboundAudio, waitForRemoteFrames } from '../fixtures/livekit'
 
-// DoD: a Chromium ↔ Firefox call works with E2EE (docs/stages/05-call-core.md).
+// DoD: a Chromium ↔ Firefox call works with E2EE (docs/stages/05-call-core.md). Both people join through the real
+// meeting page `/m/<slug>`: the host from the dashboard's host link, the guest from an invite link in the other engine.
 test.describe('end-to-end encrypted call', () => {
-  test('Chromium and Firefox see and hear each other, encrypted', async ({ joinAs, browserName }) => {
-    const otherEngine = browserName === 'chromium' ? 'firefox' : 'chromium'
-    const host = await joinAs('host', { name: 'Hana Host' })
-    const guest = await joinAs('participant', { name: 'Gus Guest', room: host.room, browser: otherEngine })
+  test('Chromium and Firefox see and hear each other, encrypted', async ({ flows, browserName }) => {
+    const { host, room } = await flows.meeting({ name: 'Encrypted sync' }, { hostName: 'Hana Host' })
+    const guest = await flows.joinAsGuest(room, { name: 'Gus Guest', browser: otherEngine(browserName) })
 
-    const pairs: Array<[JoinedPeer, JoinedPeer]> = [
+    const pairs: Array<[InCall, InCall]> = [
       [host, guest],
       [guest, host],
     ]

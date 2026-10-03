@@ -1,17 +1,13 @@
-import { expect, test } from '../fixtures'
 import { callState, inboundAudio, inboundVideo, subscriptions } from '../fixtures/livekit'
+import { expect, test } from './support'
 
-// DoD: an unencrypted publisher is blocked (docs/SECURITY.md §3.2). The publisher is a harness client joined with
-// e2ee=off (test builds only) that publishes an extra canvas track through the publishUnencryptedTrack hook.
+// DoD: an unencrypted publisher is blocked (docs/SECURITY.md §3.2). The host is in the call on the real meeting page.
+// The product UI cannot publish without encryption, so Mallory holds a real grant and runs the harness with e2ee=off
+// (test builds only), then publishes an extra canvas track through the publishUnencryptedTrack hook.
 test.describe('unencrypted media', () => {
-  test('is never subscribed or played, and the UI warns about it', async ({ joinAs }) => {
-    const host = await joinAs('host', { name: 'Hana Host' })
-    const mallory = await joinAs('participant', {
-      name: 'Mallory Plain',
-      room: host.room,
-      e2ee: 'off',
-      camera: false,
-    })
+  test('is never subscribed or played, and the UI warns about it', async ({ flows, intruders }) => {
+    const { host, room } = await flows.meeting({}, { hostName: 'Hana Host' })
+    const mallory = await intruders.open(room, host.account, { name: 'Mallory Plain', e2ee: 'off', camera: false })
     await mallory.page.evaluate(async () => {
       const hooks = (window as unknown as { __blinqTest: { publishUnencryptedTrack?: () => Promise<void> } })
         .__blinqTest

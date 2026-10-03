@@ -261,6 +261,33 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       `hasModerationMenu`, `bytesEqual`, `queuePosition`, `displayedSetting`) and duplicates (UUID regex ×8,
       `likePattern` ×5, moderator check ×3, server forks of `StreamEvent` and the settings patch schema) — owner:
       fix-server + fix-call + fix-ui (dead code); duplicates accepted for v1 — status: open
+- [ ] F-051 [low] ui — the 403 and 404 error pages log `[NUXT_E1005]` to the console while hydrating (e2e-security) —
+      owner: fix-ui — status: open
+- [ ] F-052 [high] ui — axe critical `aria-required-children` on `/settings/sessions`: the session list has
+      `role="list"` but its items have no `listitem` role (SessionList.vue) (e2e-a11y) — owner: fix-ui — status: open
+- [x] F-053 [medium] ui-kit — slider thumbs (`role="slider"`) have no accessible name; `aria-label` stays on the root
+      (`app/components/ui/slider/Slider.vue`) — owner: orchestrator — status: fixed (the thumb gets the name; a11y
+      `axe-call` runs without the exception)
+- [ ] F-054 [medium] call — chat messages are `<li>` inside `<ol role="log">`, which drops the list semantics
+      (ChatPanel) — owner: fix-call — status: open
+- [ ] F-055 [medium] ui — destructive buttons in the dark theme are 4.42:1 (#f66c6d on #432c33) — owner: fix-ui —
+      status: open
+- [ ] F-056 [medium] call — closing the device settings dialog opened from More options leaves focus on `<body>`
+      (WCAG 2.4.3) — owner: fix-call — status: open
+- [ ] F-057 [medium] ui — a long room name overflows the dashboard by 118 px at 375 px and pushes dialogs past the
+      screen edge (RoomListItem `ItemTitle`) — owner: fix-ui — status: open
+- [ ] F-058 [medium] ui — touch targets under 44 px on phones on every page except the call control bar (shadcn
+      buttons, inputs, selects, switches, toggle groups, pagination, sidebar trigger, slider thumb; logo, Show password,
+      text links; the E2EE badge and tile options in the call) — owner: fix-ui (+ fix-call for call controls) —
+      status: open
+- [ ] F-059 [low] call — toggling the mic right after joining, before the first publish, logs "could not update mute
+      status for unpublished track" — owner: fix-call — status: open
+- [ ] F-060 [low] call — when the mic chain's AudioContext never runs (e.g. no audio backend), the published mic is
+      silence with no warning (e2e-prod, Firefox in the Playwright Linux image) — owner: fix-call — status: open
+- [ ] F-061 [low] e2e — `call/e2ee` and `media/mic-chain` assert `totalAudioEnergy > 0`, which comfort noise from a
+      silent sender satisfies — owner: e2e-flows (call) + fix-call (media) — status: open
+- [ ] F-062 [low] infra — Caddy logs livekit-client's `join_request=` query (the SDP offer with ICE credentials) —
+      owner: fix-infra (+ orchestrator for the e2e Caddyfile) — status: open
 
 ## Tests
 - API: `tests/api/security/{authz-matrix,idor,csrf,rate-limits,cookies,headers}.test.ts`.

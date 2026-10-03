@@ -21,10 +21,9 @@ export const smoke = {
   turnDomain: () => required('SMOKE_TURN_DOMAIN'),
   /** Caddy's internal root certificate (TLS_MODE=internal), copied out of the caddy_data volume. */
   caCert: () => readFileSync(required('SMOKE_CA_FILE')),
-  /** LiveKit RoomService on loopback (never public). */
-  livekitUrl: () => required('SMOKE_LIVEKIT_URL'),
-  livekitKey: () => required('LIVEKIT_API_KEY'),
-  livekitSecret: () => required('LIVEKIT_API_SECRET'),
+  /** The bootstrap admin from .env.smoke (ADMIN_PASSWORD is its first-login password). */
+  adminEmail: () => required('ADMIN_EMAIL'),
+  adminPassword: () => required('ADMIN_PASSWORD'),
   nodeIp: () => required('SMOKE_NODE_IP'),
   rtcPortRange: (): [number, number] => {
     const [start, end] = required('SMOKE_RTC_PORT_RANGE').split('-').map(Number)

@@ -1,16 +1,18 @@
-import { expect, test } from '../fixtures'
 import { callState, inboundAudio, inboundVideo, randomRoomKey } from '../fixtures/livekit'
+import { expect, test } from './support'
 
-// DoD: a wrong-key peer gets no frames. Both peers encrypt (the SFU forwards the packets), but neither can decrypt
-// the other's frames: framesDecoded stays 0 and no audio energy arrives.
+// DoD: a wrong-key peer gets no frames. The host is in the call on the real meeting page. The real join flow cannot
+// produce a peer with another key (the join proof rejects it, see join/errors), so Eve holds a real grant but runs the
+// harness with a different key, as a client of a compromised server would. Both peers encrypt (the SFU forwards the
+// packets), but neither can decrypt the other's frames: framesDecoded stays 0 and no audio energy arrives.
 test.describe('wrong meeting key', () => {
-  test('decodes nothing in either direction and marks the tile', async ({ joinAs, guards }) => {
+  test('decodes nothing in either direction and marks the tile', async ({ flows, intruders, guards }) => {
     // The SDK logs every failed decryption; these errors are the point of this test.
     for (const pattern of [/valid key missing/i, /missing key/i, /decryption failed/i, /InvalidKey|MissingKey/]) {
       guards.allowConsoleError(pattern)
     }
-    const host = await joinAs('host', { name: 'Hana Host' })
-    const eve = await joinAs('participant', { name: 'Eve Other', room: host.room, key: randomRoomKey() })
+    const { host, room } = await flows.meeting({}, { hostName: 'Hana Host' })
+    const eve = await intruders.open(room, host.account, { name: 'Eve Other', key: randomRoomKey() })
 
     for (const [viewer, publisher] of [
       [host, eve],

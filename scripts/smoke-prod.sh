@@ -64,6 +64,7 @@ RTC_END=60000
 mkdir -p "$OUT"
 rm -rf "$OUT/results" "$OUT/report"
 : > "$SUMMARY"
+run_start=$(date +%s)
 
 failures=0
 log() { printf 'smoke-prod: %s\n' "$*" >&2; }
@@ -100,10 +101,11 @@ finish() {
   [ "$keep" -eq 1 ] || rm -f "$ENV_FILE" "$ENV_FILE.missing"
   if [ "$status" -eq 0 ] && [ "$failures" -gt 0 ]; then status=1; fi
   printf '\n' >&2
+  elapsed="$(($(date +%s) - run_start)) s"
   if [ "$status" -eq 0 ]; then
-    log "passed (summary: $SUMMARY)"
+    log "passed in $elapsed (summary: $SUMMARY)"
   else
-    log "FAILED with $failures failed check(s) (summary: $SUMMARY; logs: $OUT/compose.log; report: $OUT/report)"
+    log "FAILED with $failures failed check(s) after $elapsed (summary: $SUMMARY; logs: $OUT/compose.log; report: $OUT/report)"
   fi
   exit "$status"
 }
@@ -310,14 +312,16 @@ section "Playwright (tests/smoke-prod)"
 docker image inspect "$PLAYWRIGHT_IMAGE" > /dev/null 2>&1 || docker pull -q "$PLAYWRIGHT_IMAGE" > /dev/null
 [ -d node_modules/@playwright/test ] || die "node_modules is missing: run pnpm install --frozen-lockfile first"
 playwright_status=0
-docker run --rm --init --network host --ipc host --user "$(id -u):$(id -g)" \
+# call.spec.ts signs in as the bootstrap admin through the UI (and sets a new password on the first sign-in). Its
+# credentials reach the container through the environment, never the command line.
+ADMIN_EMAIL=$(env_value ADMIN_EMAIL) ADMIN_PASSWORD=$(env_value ADMIN_PASSWORD | sed "s/^'//; s/'$//") \
+  docker run --rm --init --network host --ipc host --user "$(id -u):$(id -g)" \
   --add-host "$SMOKE_DOMAIN:127.0.0.1" --add-host "$SMOKE_TURN_DOMAIN:127.0.0.1" \
   -v "$ROOT:/repo:ro" -v "$OUT:/out" -w /repo \
   -e HOME=/tmp -e CI="${CI:-}" -e SMOKE_OUTPUT_DIR=/out \
   -e "SMOKE_BASE_URL=https://$SMOKE_DOMAIN" -e "SMOKE_TURN_DOMAIN=$SMOKE_TURN_DOMAIN" \
   -e SMOKE_CA_FILE=/out/caddy-root.crt -e NODE_EXTRA_CA_CERTS=/out/caddy-root.crt \
-  -e "SMOKE_LIVEKIT_URL=http://127.0.0.1:$LIVEKIT_HTTP_PORT" \
-  -e "LIVEKIT_API_KEY=$(env_value LIVEKIT_API_KEY)" -e "LIVEKIT_API_SECRET=$(env_value LIVEKIT_API_SECRET)" \
+  -e ADMIN_EMAIL -e ADMIN_PASSWORD \
   -e "SMOKE_NODE_IP=$NODE_IP" -e "SMOKE_RTC_PORT_RANGE=$RTC_START-$RTC_END" \
   "$PLAYWRIGHT_IMAGE" node node_modules/@playwright/test/cli.js test -c tests/smoke-prod/playwright.config.ts ||
   playwright_status=$?
@@ -402,6 +406,18 @@ if grep -qE 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' "$OU
   failed "a JWT (LiveKit token) appears in the container logs"
 else
   pass "no JWT in the container logs"
+fi
+# call.spec.ts handles a room key, an invite link and session and guest cookies (the admin's new password contains
+# ADMIN_PASSWORD, so the scan above covers it).
+if grep -qE '([#&]|\\u0026)[kt]=[A-Za-z0-9_-]{16,}' "$OUT/compose.log"; then
+  failed "a room key or invite token (k= or t=) appears in the container logs"
+else
+  pass "no room key or invite token in the container logs"
+fi
+if grep -oE 'blinq_(session|g_[A-Za-z0-9_-]+)=[^;", \\]*' "$OUT/compose.log" | grep -qv '=REDACTED$'; then
+  failed "a session or guest cookie value appears in the container logs"
+else
+  pass "no session or guest cookie value in the container logs"
 fi
 if grep -oE 'access_token=[^&" \\]*' "$OUT/compose.log" | grep -qv '^access_token=REDACTED$'; then
   failed "an unredacted access_token query value appears in the container logs"

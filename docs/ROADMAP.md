@@ -239,3 +239,11 @@ tracked as F-001 to F-011 in the Stage 10 Findings list):
   Stage 10 Findings list. Orchestrator fixes on main: F-010, F-012, F-013, F-021 (audit exceptions), F-027 (accepted),
   F-040 (indexes, migration 0001_w3_indexes), API.md drift; e2e Caddy compresses like production. Fix agents started:
   fix-server (3005), fix-call (3003), fix-ui (3002).
+- 2026-10-03 — W3 `e2e-security` merged: `tests/api/security/*` (authz matrix over all 79 routes × 10 callers, IDOR,
+  CSRF, rate limits, cookies, headers) and `tests/e2e/security/{headers,log-scan,external-requests}`. Gate on main: lint,
+  typecheck, unit, check:english, build + check-build, 1808 API tests (7 skipped, two of them pending F-002 and F-019),
+  security E2E 27/27 on chromium, firefox and webkit-ui. New finding F-051 (NUXT_E1005 on 403/404 pages) → fix-ui.
+- 2026-10-03 — W3 `e2e-a11y` merged (axe in both themes on every page type and call state, keyboard journeys,
+  responsive pages; pending findings F-051 to F-059 marked in `tests/e2e/a11y/support.ts`) and `e2e-prod` merged (the
+  smoke-prod call runs the real UI flow on the prod image, Chromium ↔ Firefox direct and relay-only; passed twice).
+  F-053 (slider name) fixed on main. Lint, typecheck, check:english and actionlint pass after both merges.
