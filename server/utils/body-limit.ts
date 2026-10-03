@@ -2,7 +2,8 @@
  * Reading a request body whose size is not declared (server-core, F-025).
  *
  * - `readBodyWithLimit(stream, limit)` → the whole body as a Buffer, or rejects with `BodyTooLargeError` as soon as
- *   more than `limit` bytes arrived (it stops listening; the rest is never buffered).
+ *   more than `limit` bytes arrived (it stops listening; the rest is never buffered). What happens to the rest is the
+ *   caller's choice: `stream.resume()` discards it, which lets the client read the answer before the connection ends.
  */
 import type { Readable } from 'node:stream'
 
@@ -27,7 +28,6 @@ export function readBodyWithLimit(stream: Readable, limit: number): Promise<Buff
       size += buffer.length
       if (size > limit) {
         cleanup()
-        stream.pause()
         reject(new BodyTooLargeError(limit))
         return
       }

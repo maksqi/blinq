@@ -7,7 +7,7 @@
  * bodies and are skipped. Runs after the CSRF and password-change guards, so rejected requests are never read.
  */
 import type { IncomingMessage } from 'node:http'
-import { getRequestHeader, setResponseHeader } from 'h3'
+import { getRequestHeader } from 'h3'
 import { apiError } from '../utils/api-error'
 import { BodyTooLargeError, readBodyWithLimit } from '../utils/body-limit'
 import { API_BODY_LIMIT_BYTES, bodyLimitDecision, normalizedPath } from '../utils/request-guards'
@@ -22,15 +22,16 @@ export default defineEventHandler(async (event) => {
   })
   if (decision === 'ok') return
   if (decision === 'count') {
+    const req = event.node.req as IncomingMessage & { rawBody?: Buffer }
     try {
-      const req = event.node.req as IncomingMessage & { rawBody?: Buffer }
       req.rawBody = await readBodyWithLimit(req, API_BODY_LIMIT_BYTES)
       return
     } catch (error) {
       if (!(error instanceof BodyTooLargeError)) throw error
+      // Discard the rest instead of closing with unread data, which would reset the connection before the client
+      // reads the 413 (Node's request timeout still bounds an endless body). Nothing of it is buffered.
+      req.resume()
     }
   }
-  // The client may still be sending: do not keep the connection for the rest of it.
-  setResponseHeader(event, 'Connection', 'close')
   throw apiError('VALIDATION_FAILED', 413)
 })
