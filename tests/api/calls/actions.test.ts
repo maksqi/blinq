@@ -241,6 +241,19 @@ describe.skipIf(!usesFakeLivekit())('in-call actions', () => {
     expect(lobby.body.items).toEqual([{ requestId, displayName: expect.any(String), kind: 'guest', requestedAt: expect.any(String) }])
   })
 
+  it('GET lobby leaves stale requests out without writing anything (F-046)', async () => {
+    const meeting = await liveMeeting()
+    const fresh = await waitingRequest(meeting)
+    const stale = await waitingRequest(meeting)
+    await testDb()
+      .update(callParticipants)
+      .set({ requestedAt: new Date(Date.now() - 61 * 60_000) })
+      .where(eq(callParticipants.id, stale))
+    const lobby = await meeting.cohost.api.get(`/api/calls/${meeting.room.id}/lobby`)
+    expect(lobby.body.items.map((entry: { requestId: string }) => entry.requestId)).toEqual([fresh])
+    expect((await row(stale)).status).toBe('waiting') // the maintenance closes it, not a read
+  })
+
   it('admit-all admits in order up to capacity', async () => {
     const meeting = await liveMeeting()
     await testDb().update(rooms).set({ maxParticipants: 8 }).where(eq(rooms.id, meeting.room.id))

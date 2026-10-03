@@ -28,6 +28,7 @@ import { and, eq, inArray, like, or, sql } from 'drizzle-orm'
 import { setResponseHeader, type H3Event } from 'h3'
 import { useDb } from '../database/client'
 import { loginThrottle } from '../database/schema'
+import { AdvisoryLockTimeoutError, withAdvisoryLocks } from './advisory-lock'
 import { apiError } from './api-error'
 import { limiterKeysForIp } from './client-ip'
 
@@ -338,33 +339,44 @@ export function roomPasswordThrottleKey(roomId: string, ip: string | null): stri
   return `room:${roomId}:${limiterKeysForIp(ip).net}`
 }
 
-const lockThrottleKey = (key: string) =>
-  sql`select pg_advisory_xact_lock(hashtextextended(${`blinq:throttle:${key}`}, 0))`
+/** How long an attempt waits for the locks of its keys; after that it is refused like a backoff (decision). */
+export const THROTTLE_LOCK_WAIT_MS = 3_000
 
 /**
  * Atomically decides and reserves an attempt (`planAttempt`) in `login_throttle`. Per-key advisory locks (also for
- * rows that do not exist yet), taken in sorted order, make parallel attempts on a key run one after another: the 7th of
- * 40 parallel wrong passwords already sees six reserved failures and waits. Without an explicit `now`, the clock is
- * read once the locks are held, so time spent waiting for them never inflates `Retry-After`.
+ * rows that do not exist yet) make parallel attempts on a key run one after another: the 7th of 40 parallel wrong
+ * passwords already sees six reserved failures and waits. Waiting holds no pool connection (`withAdvisoryLocks`), so a
+ * flood against one address cannot starve the app; an attempt that cannot get its locks within
+ * `THROTTLE_LOCK_WAIT_MS` is refused for a second. Without an explicit `now`, the clock is read once the locks are
+ * held, so time spent waiting never inflates `Retry-After`.
  */
 export async function reserveAttempt(keys: AttemptKey[], now?: Date): Promise<AttemptDecision> {
   const specs = normalizeAttemptKeys(keys)
   if (!specs.length) return { allowed: true, reservation: { keys: [] } }
   const names = specs.map((spec) => spec.key)
-  return useDb().transaction(async (tx) => {
-    for (const key of [...names].sort()) await tx.execute(lockThrottleKey(key))
-    const rows = await tx.select().from(loginThrottle).where(inArray(loginThrottle.key, names))
-    const decision = planAttempt(specs, rows, now ?? new Date())
-    if (!decision.allowed) return decision
-    for (const entry of decision.reservation.keys) {
-      const values = { failures: entry.failures, nextAllowedAt: entry.nextAllowedAt, updatedAt: entry.updatedAt }
-      await tx
-        .insert(loginThrottle)
-        .values({ key: entry.key, ...values })
-        .onConflictDoUpdate({ target: loginThrottle.key, set: values })
-    }
-    return decision
-  })
+  try {
+    return await withAdvisoryLocks(
+      useDb(),
+      names.map((key) => `blinq:throttle:${key}`),
+      async (tx) => {
+        const rows = await tx.select().from(loginThrottle).where(inArray(loginThrottle.key, names))
+        const decision = planAttempt(specs, rows, now ?? new Date())
+        if (!decision.allowed) return decision
+        for (const entry of decision.reservation.keys) {
+          const values = { failures: entry.failures, nextAllowedAt: entry.nextAllowedAt, updatedAt: entry.updatedAt }
+          await tx
+            .insert(loginThrottle)
+            .values({ key: entry.key, ...values })
+            .onConflictDoUpdate({ target: loginThrottle.key, set: values })
+        }
+        return decision
+      },
+      { waitMs: THROTTLE_LOCK_WAIT_MS },
+    )
+  } catch (error) {
+    if (error instanceof AdvisoryLockTimeoutError) return { allowed: false, retryAfterMs: 1_000 }
+    throw error
+  }
 }
 
 /** Gives a reserved attempt back on `keys` (default: all of them), as `planRefund` describes. Rows at 0 are deleted. */

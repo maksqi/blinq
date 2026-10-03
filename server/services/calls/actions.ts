@@ -14,7 +14,7 @@
  *   `removed` (final for the meeting), their pending requests are closed as `removed`, and LiveKit removes the
  *   identities with `revokeTokensIssuedBefore` one minute ahead (LiveKit's own default leeway) (decision).
  * - `changeRole`: the row's role and permissions; users are persisted in (or removed from) `room_members`, guests
- *   only on the live row.
+ *   only on the live row. A co-host demoted under the "hosts" share policy has a running screen share muted.
  * - `muteAll`: mutes the microphones of all participants (not hosts and co-hosts); `preventSelfUnmute` also turns
  *   the room's self-unmute off (metadata + every participant's microphone allowance) (decision).
  * - `updateLiveSettings`: `locked` (lock also closes the lobby: waiting requests get `denied { reason: 'locked' }`
@@ -242,6 +242,13 @@ export async function changeRole(event: H3Event, ctx: CallContext, role: 'cohost
     }
   }
   await withLivekit('updateParticipant', () => pushParticipantState(ctx.room, row, { attributes: true, permission: true }))
+  // Under the "hosts" share policy a demoted co-host loses screen sharing: like any revoked source, a running share is
+  // muted at once, whatever LiveKit does with the old publication (F-046).
+  if (role === 'participant' && ctx.room.screenSharePolicy === 'hosts') {
+    await withLivekit('mutePublishedTrack', () =>
+      muteSources(ctx.room.id, row.lkIdentity, ['screen_share', 'screen_share_audio']),
+    )
+  }
   await hintModerators(ctx.room.id, ctx.meetingId, 'participant.changed')
   await auditCall(event, ctx, 'call.role', { role })
 }

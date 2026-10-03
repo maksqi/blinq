@@ -15,9 +15,9 @@
  * - `cancelRequest(event, requestId, now)`, `streamWaitingEvents(event, requestId)` (at most 2 open streams per
  *   request, the oldest is closed; at most 50 per network, then 429 `RATE_LIMITED`).
  */
-import { and, asc, count, eq, inArray, isNull, lt, or, type SQL } from 'drizzle-orm'
+import { and, asc, count, eq, gte, inArray, isNull, lt, or, type SQL } from 'drizzle-orm'
 import type { H3Event } from 'h3'
-import type { JoinGrant } from '#shared/schemas/join'
+import type { WaitingEvent } from '#shared/schemas/join'
 import type { LobbyEntry } from '#shared/schemas/calls'
 import { useDb, type Db, type Tx } from '../../database/client'
 import { callParticipants } from '../../database/schema'
@@ -83,12 +83,13 @@ export async function closeStaleWaiting(now: Date = new Date(), roomId?: string)
   return closed.length
 }
 
+/** Read-only (F-046): stale requests are left out here and closed by the rooms maintenance or the next decision. */
 export async function listLobby(roomId: string, meetingId: string, now: Date = new Date()): Promise<LobbyEntry[]> {
-  await closeStaleWaiting(now, roomId)
+  const cutoff = new Date(now.getTime() - WAITING_TTL_MS)
   const rows = await useDb()
     .select()
     .from(callParticipants)
-    .where(waitingFor(roomId, meetingId))
+    .where(and(waitingFor(roomId, meetingId), gte(callParticipants.requestedAt, cutoff)))
     .orderBy(asc(callParticipants.requestedAt), asc(callParticipants.id))
   return rows.map((row) => ({
     requestId: row.id,
@@ -220,13 +221,7 @@ export async function cancelRequest(event: H3Event, requestId: string, now: Date
   await notifyLobbyChanged(row.roomId, row.meetingId)
 }
 
-type StreamEvent =
-  | { event: 'status'; data: { status: 'waiting' } }
-  | { event: 'admitted'; data: Omit<JoinGrant, 'status'> }
-  | { event: 'denied'; data: { reason: 'denied' | 'removed' | 'locked' } }
-  | { event: 'ended'; data: Record<string, never> }
-
-export async function currentWaitingEvent(requestId: string): Promise<StreamEvent> {
+export async function currentWaitingEvent(requestId: string): Promise<WaitingEvent> {
   const db = useDb()
   const [row] = await db.select().from(callParticipants).where(eq(callParticipants.id, requestId)).limit(1)
   const room = row ? await findRoomById(row.roomId, { includeDeleted: true }) : null

@@ -3,13 +3,17 @@
  * random epoch per meeting, one LiveKit room per meeting (name = `rooms.id`).
  *
  * - `withRoomLock(roomId, fn)`: a transaction holding a per-room advisory lock. Joins, admissions, key rotation and
- *   meeting ends run under it, so capacity, the lobby cap, meeting creation and meeting ends never race. Never nest
- *   two of them for the same room (the inner one would wait for the outer one forever).
+ *   meeting ends run under it, so capacity, the lobby cap, meeting creation and meeting ends never race. Waiters do
+ *   not hold a pool connection (`withAdvisoryLocks` polls), so many parallel joins of one room cannot starve the
+ *   rest of the app (F-046); after `ROOM_LOCK_WAIT_MS` they answer 503 `SERVICE_UNAVAILABLE`. Never nest two of
+ *   them for the same room (the inner one would wait for the outer one until it times out).
  * - `findLiveMeeting(db, roomId)`, `effectiveMaxParticipants(room, settings)`.
  * - `createMeeting(tx, room, now)`: inserts the meeting (the unique partial index settles races: the loser reuses the
  *   winner), attaches requests that waited before the meeting existed, and creates the LiveKit room with metadata from
  *   the `publishRoomState` builder. Any leftover LiveKit room of the same name is deleted first, so nobody from an
- *   earlier meeting can stay connected with an old epoch.
+ *   earlier meeting can stay connected with an old epoch. The LiveKit calls stay inside the room lock on purpose
+ *   (decision, F-046): the meeting row and its LiveKit room must appear together (a join that sees the meeting
+ *   gets a token for a room that exists) and a failed creation must roll the meeting and the first join back.
  * - `endMeeting(roomId, options)`: ends the live meeting (DB first: meeting, rows, lock reset, ephemeral archive), then
  *   deletes the LiveKit room, closes waiting requests with `ended` and publishes `recording.changed` for active
  *   recordings. Returns false when no live meeting matched. A webhook passes the LiveKit room sid so a late
@@ -23,6 +27,8 @@ import type { MeetingSummary } from '#shared/schemas/rooms'
 import type { Settings } from '#shared/schemas/settings'
 import { useDb, type Db, type Tx } from '../../database/client'
 import { callParticipants, meetings, recordings, rooms } from '../../database/schema'
+import { AdvisoryLockTimeoutError, withAdvisoryLocks } from '../../utils/advisory-lock'
+import { apiError } from '../../utils/api-error'
 import { eventBus } from '../../utils/event-bus'
 import { logger } from '../../utils/logger'
 import { buildRoomMetadata } from '../livekit/metadata'
@@ -36,11 +42,16 @@ export const ROOM_HARD_MAX_PARTICIPANTS = 25
 export const EMPTY_TIMEOUT_SEC = 300
 export const DEPARTURE_TIMEOUT_SEC = 20
 
-export function withRoomLock<T>(roomId: string, fn: (tx: Tx) => Promise<T>, db: Db = useDb()): Promise<T> {
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`blinq:room:${roomId}`}, 0))`)
-    return fn(tx)
-  })
+/** How long a join, admission or meeting end waits for the room lock before answering 503 (decision). */
+export const ROOM_LOCK_WAIT_MS = 15_000
+
+export async function withRoomLock<T>(roomId: string, fn: (tx: Tx) => Promise<T>, db: Db = useDb()): Promise<T> {
+  try {
+    return await withAdvisoryLocks(db, [`blinq:room:${roomId}`], fn, { waitMs: ROOM_LOCK_WAIT_MS })
+  } catch (error) {
+    if (error instanceof AdvisoryLockTimeoutError) throw apiError('SERVICE_UNAVAILABLE', 503)
+    throw error
+  }
 }
 
 export async function findLiveMeeting(db: Db | Tx, roomId: string): Promise<MeetingRow | null> {

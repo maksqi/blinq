@@ -3,9 +3,11 @@
  * cleanup and retention (injected clocks; rows are unique per test).
  */
 import { randomBytes } from 'node:crypto'
-import { eq, inArray } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 import { H3Error } from 'h3'
 import { describe, expect, it } from 'vitest'
+import { useDb } from '../../../server/database/client'
+import { AdvisoryLockTimeoutError, withAdvisoryLocks } from '../../../server/utils/advisory-lock'
 import {
   auditLog,
   callParticipants,
@@ -125,18 +127,56 @@ describe('login backoff (login_throttle)', () => {
   })
 })
 
+describe('advisory locks without parked connections (F-046)', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('serializes holders of a key, and its waiters never starve the pool', async () => {
+    const key = `test:${randomBytes(8).toString('hex')}`
+    const order: string[] = []
+    const holder = withAdvisoryLocks(useDb(), [key], async () => {
+      order.push('holder:start')
+      await sleep(400)
+      order.push('holder:end')
+    })
+    await sleep(50)
+    // More waiters than the pool has connections (10).
+    const waiters = Array.from({ length: 15 }, (_, i) =>
+      withAdvisoryLocks(useDb(), [key], async () => void order.push(`waiter:${i}`)),
+    )
+    await sleep(50)
+    const started = Date.now()
+    await useDb().execute(sql`select 1`)
+    expect(Date.now() - started).toBeLessThan(250) // a blocking lock would park all 10 connections until 400 ms
+    await Promise.all([holder, ...waiters])
+    expect(order.slice(0, 2)).toEqual(['holder:start', 'holder:end'])
+    expect(order).toHaveLength(17)
+  })
+
+  it('gives up after waitMs with AdvisoryLockTimeoutError', async () => {
+    const key = `test:${randomBytes(8).toString('hex')}`
+    const holder = withAdvisoryLocks(useDb(), [key], () => sleep(300))
+    await sleep(30)
+    await expect(withAdvisoryLocks(useDb(), [key], async () => 'never', { waitMs: 80 })).rejects.toBeInstanceOf(
+      AdvisoryLockTimeoutError,
+    )
+    await holder
+    expect(await withAdvisoryLocks(useDb(), [key, `${key}:2`], async () => 'free again')).toBe('free again')
+  })
+})
+
 describe('settings service', () => {
   it('writes only the sent keys, invalidates the cache and records the actor', async () => {
     const admin = await createAdmin()
     try {
       const before = await getSettings()
       const keysBefore = (await testDb().select({ key: settings.key }).from(settings)).map((r) => r.key)
-      const next = await updateSettings({ 'limits.maxRoomsPerUser': 7 }, admin.id)
+      const at = new Date('2026-09-30T08:00:00Z')
+      const next = await updateSettings({ 'limits.maxRoomsPerUser': 7 }, admin.id, at)
       expect(next['limits.maxRoomsPerUser']).toBe(7)
       expect(next['guests.allowed']).toBe(before['guests.allowed'])
       expect((await getSettings())['limits.maxRoomsPerUser']).toBe(7)
       const [row] = await testDb().select().from(settings).where(eq(settings.key, 'limits.maxRoomsPerUser'))
-      expect(row).toMatchObject({ value: 7, updatedBy: admin.id })
+      expect(row).toMatchObject({ value: 7, updatedBy: admin.id, updatedAt: at }) // the injected clock (F-047)
       const rows = await testDb().select({ key: settings.key }).from(settings)
       expect(rows.map((r) => r.key).sort()).toEqual([...new Set([...keysBefore, 'limits.maxRoomsPerUser'])].sort())
     } finally {
@@ -156,7 +196,9 @@ describe('settings service', () => {
   it('keeps system flags out of getSettings', async () => {
     const key = `system.test_${randomBytes(4).toString('hex')}` as const
     try {
-      await setSystemFlag(key, { on: true })
+      const at = new Date('2026-09-30T08:00:00Z')
+      await setSystemFlag(key, { on: true }, undefined, at)
+      expect((await testDb().select().from(settings).where(eq(settings.key, key)))[0]!.updatedAt).toEqual(at)
       expect(await getSystemFlag(key)).toEqual({ on: true })
       invalidateSettingsCache()
       expect(JSON.stringify(await getSettings())).not.toContain(key)
