@@ -110,8 +110,10 @@ describe.skipIf(!usesFakeLivekit())('participant_joined enforcement', () => {
     const room = await createRoom(owner, { waitingRoom: false })
     await startMeeting(room, owner)
     const stale = await joinGuest(room, { expectStatus: 200 })
-    await sendWebhook('participant_joined', room, { identity: stale.identity, joinedAtMs: Date.now() - 600_000 })
-    await sendWebhook('participant_left', room, { identity: stale.identity, joinedAtMs: Date.now() - 600_000 })
+    const connectedAt = Date.now() - 600_000
+    await sendWebhook('participant_joined', room, { identity: stale.identity, joinedAtMs: connectedAt })
+    await sendWebhook('participant_left', room, { identity: stale.identity, joinedAtMs: connectedAt })
+    expect((await participantRow(stale.identity))!.status).toBe('left')
     await testDb()
       .update(callParticipants)
       .set({ leftAt: new Date(Date.now() - 121_000) })
