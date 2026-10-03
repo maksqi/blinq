@@ -8,6 +8,7 @@ import {
   HASHING_MAX_WAITING,
   hashPassword,
   isCommonPassword,
+  passwordHashingSaturated,
   passwordNeedsRehash,
   verifyAgainstDummy,
   verifyPassword,
@@ -37,9 +38,13 @@ describe('hashPassword / verifyPassword', () => {
   })
 
   it('refuses work beyond 4 running and 16 waiting hashes with 429 RATE_LIMITED (F-016)', async () => {
-    const results = await Promise.allSettled(
+    expect(passwordHashingSaturated()).toBe(false)
+    const pending = Promise.allSettled(
       Array.from({ length: HASHING_CONCURRENCY + HASHING_MAX_WAITING + 2 }, () => hashPassword('a flood of hashes', fast)),
     )
+    expect(passwordHashingSaturated()).toBe(true)
+    const results = await pending
+    expect(passwordHashingSaturated()).toBe(false)
     const refused = results.filter((result) => result.status === 'rejected')
     expect(refused).toHaveLength(2)
     for (const result of refused) {

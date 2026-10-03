@@ -38,6 +38,11 @@ export function passwordHashingBusy() {
   return apiError('RATE_LIMITED', 429, { retryAfter: HASHING_BUSY_RETRY_AFTER_SECONDS })
 }
 
+/** True while the hashing queue is full: callers can refuse at once, before any other work (a login flood). */
+export function passwordHashingSaturated(): boolean {
+  return hashing.waiting >= HASHING_MAX_WAITING
+}
+
 async function withHashingSlot<T>(task: () => Promise<T>): Promise<T> {
   try {
     return await hashing.run(task)

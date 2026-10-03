@@ -8,7 +8,8 @@
  *    otherwise it already counts as a failure, so parallel guesses see each other.
  * 3. The `password` provider verifies the credentials. Unknown emails pay the argon2 cost and get exactly the same
  *    401 `AUTH_INVALID_CREDENTIALS` as a wrong password; both stay counted on every key. A full hashing queue answers
- *    429 and gives the attempt back.
+ *    429 (`Retry-After: 1`): checked first, before any database work, and again by the hashing itself, which then
+ *    gives the attempt back.
  * 4. Only after a correct password are disabled and unverified states revealed (`completeSignIn`); such refusals give
  *    the attempt back (a right password is not a guess).
  * 5. Success clears the account keys (email and network + email) and gives the attempt back on the network key.
@@ -18,6 +19,7 @@ import type { AuthUser } from '#shared/schemas/auth'
 import { apiError } from '../../utils/api-error'
 import { getClientIp, limiterKeysForIp } from '../../utils/client-ip'
 import { createConcurrencyLimit, throwRateLimited } from '../../utils/limiter'
+import { passwordHashingBusy, passwordHashingSaturated } from '../../utils/password'
 import { passwordProvider } from './providers'
 import { auditLoginFailure, completeSignIn } from './sign-in'
 import { loginAttemptKeys, loginThrottle } from './throttle'
@@ -39,6 +41,9 @@ export async function loginWithPassword(event: H3Event, input: { email: string; 
 }
 
 async function attemptLogin(event: H3Event, email: string, password: string, ip: string | null): Promise<AuthUser> {
+  // Under a flood the hashing queue is full: refuse before touching the database (the check below still catches the
+  // queue filling up in between).
+  if (passwordHashingSaturated()) throw passwordHashingBusy()
   const keys = loginAttemptKeys(email, ip)
   const attempt = await loginThrottle.reserve(event, keys)
 
