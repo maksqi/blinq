@@ -17,9 +17,8 @@ const LEAVE_RECONNECT = Buffer.from([0x42, 0x04, 0x08, 0x01, 0x18, 0x02])
 test.describe('reconnect', () => {
   for (const scenario of ['signal drop', 'server-requested reconnect'] as Scenario[]) {
     test(`the banner appears and clears (${scenario})`, async ({ flows, guards }, testInfo) => {
-      // pending finding: a full reconnect is removed by webhook enforcement (the old session's participant_left already
-      // marked the row `left`), so the person lands on "You're not connected" instead of back in the call.
-      test.fixme(scenario === 'server-requested reconnect', 'pending finding: full reconnect removed by enforcement')
+      // A full reconnect: the old session's participant_left marks the row `left`, and the new session's
+      // participant_joined takes it back instead of enforcing a removal (F-039).
       // A full reconnect tears the old peer connections down; the SDK logs their data channels closing.
       if (scenario === 'server-requested reconnect') {
         guards.allowConsoleError(/DataChannel error on \w+: User-Initiated Abort|data channel '\w+' closed unexpectedly/)
