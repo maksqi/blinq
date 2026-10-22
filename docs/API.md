@@ -9,9 +9,11 @@ review.
 
 - **Base path** `/api`. Request and response bodies are JSON (`application/json; charset=utf-8`), except the SSE stream,
   recording chunk uploads (`application/octet-stream`) and the recording file (`video/mp4`). Every `/api/**` response
-  has `cache-control: no-store`.
+  has `cache-control: no-store`, `cross-origin-resource-policy: same-origin` and `x-content-type-options: nosniff`.
 - **Body size**: 1 MB (Caddy and nuxt-security). `/api/recordings/**` allows 20 MB; the chunk handler enforces
   `RECORDING_CHUNK_MAX_BYTES` (16 MiB) while streaming.
+  The app itself refuses a declared length above 1 MB (PATCH included) and counts chunked bodies while reading them:
+  413 `VALIDATION_FAILED`.
 - **Types** below are TypeScript-style and use the names exported from `shared/schemas/*`. `Id` = uuid string,
   `IsoDate` = ISO 8601 string with offset, `B64u` = base64url without padding. Request schemas are zod objects
   parsed with `readValidatedBody(event, schema.parse)`; unknown keys are stripped, never stored.
@@ -43,16 +45,19 @@ All limiters answer 429 `RATE_LIMITED` with `Retry-After` (seconds). Backoff is 
 
 | Limiter | Key | Rule | Used by |
 |---|---|---|---|
-| `login` | `email:<address>` and `ip:<address>` / `net:<ipv6 /64>` (table `login_throttle`) | 5 free failures, then `2^(n-5)` s, max 900 s; success resets the email key | `POST /api/auth/login` |
+| `login` | `ip:<address>` / `net:<ipv6 /64>`, `<network>\|email:<address>` and `email:<address>` (table `login_throttle`) | 5 free failures per key, then `2^(n-5)` s, max 900 s; counted before the password check and given back when it is correct; `email:` applies only to networks whose pair key has failed, so the owner is never locked out; success clears the account keys; at most 8 sign-ins in flight per network | `POST /api/auth/login` |
 | `auth-ip` | IP (/64) | 10 per minute | register, verify-email, password-reset/*, invites/* |
 | `reset-email` | email | 3 per hour, silent (still 202) | `POST /api/auth/password-reset/request` |
 | `join-ip` | IP (/64) | 30 per minute | `POST /api/join/:slug/info`, `POST /api/join/:slug` |
 | `room-password` | room + IP (/64) | backoff like `login` | wrong room passwords |
-| `room-create` | user | 20 per hour | `POST /api/rooms`, `POST /api/rooms/:id/invites` |
+| `room-create` | user | 20 per hour | `POST /api/rooms`, `POST /api/rooms/:id/invites`, `PATCH /api/rooms/:id` with a new password |
 | `call-actions` | participant row | 120 per minute | `/api/calls/**` |
 | `recording-chunks` | recording | 8 per second | `PUT /api/recordings/:id/chunks/:seq` |
 
-The waiting room holds at most 50 requests per room (409 `LOBBY_FULL`); this is a cap, not a rate limit.
+Caps (not rate limits): the waiting room holds at most 50 requests per room (409 `LOBBY_FULL`); waiting-room event
+streams are limited to 2 per request (the oldest closes) and 50 per network (429, `Retry-After: 10`); password hashing
+runs 4 at a time with 16 waiting, then 429 `Retry-After: 1`; the login and room-password backoffs wait at most 3 s
+for their row lock, then 429 `Retry-After: 1`; a room lock waits at most 15 s, then 503 `SERVICE_UNAVAILABLE`.
 
 ### 1.3 Errors
 Handlers throw `apiError(code, statusCode, details?)` (`server/utils/api-error.ts`). Every error response is:
@@ -60,6 +65,9 @@ Handlers throw `apiError(code, statusCode, details?)` (`server/utils/api-error.t
 ```ts
 type ApiErrorBody = { statusCode: number; statusMessage: string; data: { code: ErrorCode; details?: unknown } }
 ```
+API errors carry exactly this body: no `url`, `message` or stack. Error responses also carry
+`x-frame-options: DENY`, `referrer-policy: no-referrer` and `content-security-policy: default-src 'none';
+frame-ancestors 'none'`.
 
 `statusMessage` is the English text from `ERROR_MESSAGES`. Validation errors carry
 `details: { issues: Array<{ path: string; message: string }> }` (decision). Codes live in
@@ -109,7 +117,7 @@ Readiness gates on the DB and applied migrations only; LiveKit is reported, not 
 | GET | `/api/auth/me` | none | — | — | `MeResponse` (`{ user: null }` when anonymous) | — |
 | POST | `/api/auth/register` | none | `auth-ip` | `registerSchema` | 201 `{ user: AuthUser }` + cookie (open) · 202 `{ verificationRequired: true }` (domain) | `REGISTRATION_CLOSED`, `REGISTRATION_DOMAIN_NOT_ALLOWED`, `AUTH_PASSWORD_WEAK`, `CONFLICT` (open mode, `email_taken`), `SERVICE_UNAVAILABLE` (domain mode without SMTP) |
 | POST | `/api/auth/verify-email` | none | `auth-ip` | `tokenBodySchema` | `{ ok: true }` | `AUTH_TOKEN_INVALID`, `AUTH_TOKEN_EXPIRED` |
-| POST | `/api/auth/password` | session (guard-exempt) | — | `changePasswordSchema` | `{ user: AuthUser }` + rotated cookie; other sessions revoked | `AUTH_INVALID_CREDENTIALS`, `AUTH_PASSWORD_WEAK` |
+| POST | `/api/auth/password` | session (guard-exempt) | `login` (wrong current passwords) | `changePasswordSchema` | `{ user: AuthUser }` + rotated cookie; other sessions revoked | `AUTH_INVALID_CREDENTIALS`, `AUTH_PASSWORD_WEAK` |
 | POST | `/api/auth/password-reset/request` | none | `auth-ip`, `reset-email` | `passwordResetRequestSchema` | 202 `{ ok: true }` (always) | `SERVICE_UNAVAILABLE` (no SMTP) |
 | POST | `/api/auth/password-reset/confirm` | none | `auth-ip` | `passwordResetConfirmSchema` | `{ ok: true }`; all sessions revoked | `AUTH_TOKEN_INVALID`, `AUTH_TOKEN_EXPIRED`, `AUTH_PASSWORD_WEAK` |
 | POST | `/api/auth/invites/preview` | none | `auth-ip` | `tokenBodySchema` | `InvitePreview` | `INVITE_INVALID`, `INVITE_EXPIRED`, `INVITE_USED` |
@@ -208,7 +216,8 @@ Check order for `POST /api/join/:slug`: proof → invite (everyone except the ho
 unrevoked invite — otherwise invite expiry would not apply to signed-in users, because the key is in every link)
 → guests allowed (global `guests.allowed` and room `allowGuests`) → lock (host and co-hosts bypass) → password →
 removed or denied in the current meeting → capacity (admitted + joined rows) → waiting room (everyone except host and
-co-hosts). `info` checks only the proof and a supplied invite and never consumes the invite. Resume: the same session
+co-hosts; also anyone whose IP or IPv6 /64 matches a removed or denied participant of the live meeting, even when the
+room has no waiting room). `info` checks only the proof and a supplied invite and never consumes the invite. Resume: the same session
 or guest session with the same `clientId` in the same live meeting gets a new token for the same identity without the
 lobby; older meetings never skip it. The first admitted join creates the meeting (new epoch) and the LiveKit room.
 
@@ -265,7 +274,8 @@ adds `RECORDING_DISABLED`, `RECORDING_ACTIVE`, `RECORDING_NOT_ALLOWED`, `RECORDI
 Effects: `mute` calls `mutePublishedTrack`; `permissions` rewrites `canPublishSources` (revoking the mic also stops
 self-unmute; screen-share audio goes with screen share); `ask-unmute` sends the `ask-unmute` hint to the target only
 (never forces); `volume` sets the `vol` attribute; `remove` marks the row `removed` (final for the meeting) and calls
-`removeParticipant` with `revokeTokensIssuedBefore`; `role` persists co-hosts with accounts in `room_members`; `end`
+`removeParticipant` with `revokeTokensIssuedBefore`; `role` persists co-hosts with accounts in `room_members`, and
+demoting a co-host while the screen-share policy is `hosts` mutes their running screen share at once; `end`
 calls `deleteRoom`, ends the meeting and sends `ended` to waiters. Nobody targets themselves or the host
 (`canPerform`). Recording routes are owned by `recording-server`; local recordings also create a row (mode `local`)
 so the REC indicator and audit work, but nothing is uploaded.
@@ -353,8 +363,9 @@ audited), `admin.test_email_sent` (only when the mail was sent), `admin.room_end
 Caddy answers 404 for `/api/webhooks/*` from outside; LiveKit posts to `127.0.0.1` (dev:
 `host.docker.internal:3000…3005`). The raw body is read before anything else, verified with `WebhookReceiver`, and
 deduplicated by event id (in-memory LRU, 10 min) (decision). Events for rooms missing from the DB are ignored.
-`participant_joined` removes identities whose row is not `admitted` or `joined`; `participant_left` and `room_finished`
-update rows and meetings.
+`participant_joined` removes identities whose row is not `admitted` or `joined`, except a row that left after its own
+connection less than 120 s ago (a full reconnect), which is taken back; `participant_left` and `room_finished` update
+rows and meetings.
 
 ## 11. Test-only (none in production)
 

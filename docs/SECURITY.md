@@ -122,7 +122,7 @@ All derivations use HKDF-SHA256 via WebCrypto. The exact info strings are in [`A
 - **Passwords:**
   - argon2id (`m=19456 KiB, t=2, p=1`, OWASP) via `@node-rs/argon2`; at least 12 characters plus a
     common-password denylist.
-  - Concurrent hashing is capped by a semaphore to prevent CPU exhaustion.
+  - Concurrent hashing is capped by a semaphore to prevent CPU exhaustion (4 running, 16 waiting, then 429).
   - Unknown emails still pay the argon2 cost (dummy hash), and errors are generic (no account enumeration).
 - **Sessions:**
   - 32 random bytes; the database stores `sha256`.
@@ -146,8 +146,11 @@ All derivations use HKDF-SHA256 via WebCrypto. The exact info strings are in [`A
 - **Brute force:**
   - Purpose-built limiters keyed by IP (IPv6 aggregated to /64), account and room, with exponential backoff and
     `Retry-After`.
-  - No hard lockout, which attackers could use to lock out the admin.
-  - Room passwords are limited per IP + room. Waiting requests are capped per room.
+  - No hard lockout, which attackers could use to lock out the admin. Attempts count before the password check (so
+    parallel guesses cannot race the backoff), and the account key only slows networks that already failed for that
+    account, so the owner can always sign in from a clean network.
+  - Room passwords are limited per IP + room. Waiting requests are capped per room, waiting-room event streams per
+    request and per network.
 - **CSRF:**
   - Mutating requests must carry `Origin` equal to `PUBLIC_URL`, and `Sec-Fetch-Site: same-origin` when the
     header is present.
@@ -166,8 +169,13 @@ All derivations use HKDF-SHA256 via WebCrypto. The exact info strings are in [`A
   - Tokens never grant `hidden`, `roomAdmin`, `roomCreate`, `roomRecord`, `recorder` or agent kind.
   - Rooms are created only by the server (`auto_create: false`).
 - **Enforcement at LiveKit:**
-  - Removal uses `revokeTokenTs` and marks the row final for the meeting.
-  - The `participant_joined` webhook removes anyone whose row isn't admitted or joined.
+  - Removal uses `revokeTokenTs` and marks the row final for the meeting. Joiners from a removed or denied
+    participant's IP (IPv6 /64) go through the waiting room for the rest of the meeting, even without one. A removed
+    person who still has an invite link and switches to a different network can join again (straight in when the room
+    has no waiting room); hosts lock the room or revoke the link to stop that (the key itself stays known until
+    mid-call key rotation exists, §1).
+  - The `participant_joined` webhook removes anyone whose row isn't admitted or joined, except a row that left after
+    its own connection less than 120 s earlier (a LiveKit full reconnect), which is taken back.
   - Deleting a room or disabling a user removes affected participants.
 
 ## 5. Web application security
@@ -189,7 +197,7 @@ All derivations use HKDF-SHA256 via WebCrypto. The exact info strings are in [`A
 - **Display names:** normalized (control, bidi and zero-width characters removed, 1–64 characters); guests carry a
   visible badge.
 - **Input validation:** shared zod schemas at every boundary. Request bodies are limited in Caddy (1 MB, larger only
-  for the chunk upload route) and in handlers, which count streamed bytes.
+  for the chunk upload route) and in the app, which refuses larger declared lengths and counts chunked bodies.
 - **Hosts and URLs:** absolute URLs are built only from `PUBLIC_URL`. `Host` and `X-Forwarded-Host` are never
   trusted, which prevents password-reset poisoning.
 - **Identifiers:** LiveKit identities are random (`p_…`). Emails and user ids never appear in LiveKit identities,

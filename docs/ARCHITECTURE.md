@@ -176,6 +176,8 @@ same `call_participants` row only when session + `clientId` + live meeting all m
 - Webhooks (`participant_joined/left`, `room_started/finished`) update `call_participants` and `meetings`. They
   are deduplicated by event id.
 - **Enforcement:** a participant whose row isn't admitted or joined is removed by the `participant_joined` handler.
+  The exception is a row that left after its own connection less than 120 s earlier: that is a LiveKit full reconnect
+  (left on the old session, joined on the new one), so the row is taken back instead.
 - `room_finished` closes the meeting. The next meeting gets a new epoch, and therefore new media and chat keys.
 
 ### 6.4 Host actions
