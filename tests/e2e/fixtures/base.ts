@@ -384,11 +384,24 @@ interface TestState {
 }
 
 /**
- * Benign framework messages allowed in every test. Nuxt fetches the build manifest in the background about a second
- * after load; when a navigation cancels that request, WebKit and Firefox log `[NUXT_E5002]`. blinq has no client-side
- * route rules or prerendered pages, so the manifest is never needed (Stage 10, F-063).
+ * Benign framework and library messages allowed in every test, each matched by its exact text.
+ * - Nuxt fetches the build manifest in the background about a second after load. When a navigation cancels that
+ *   request, WebKit and Firefox log `[NUXT_E5002]`, and WebKit may also report the cancelled fetch as an uncaught
+ *   "Fetch API cannot load <origin>/_nuxt/builds/meta/<build id>.json due to access control checks." (Playwright
+ *   splits it at the URL's colon into name and message). blinq has no client-side route rules or prerendered pages,
+ *   so the manifest is never needed (Stage 10, F-063).
+ * - Firefox rejects a pending `AudioContext.resume()` with "Navigated away from page" when the document unloads.
+ *   livekit-client 2.22 leaves one such promise unhandled: `Room.acquireAudioContext` races `resume()` against a
+ *   200 ms sleep, and the app's Join click calls `room.startAudio()`. Leaving the page soon after a Join logs it.
+ * - Chromium logs "A VideoFrame was garbage collected without being closed" when the blur pipeline of
+ *   @livekit/track-processors 0.8 is torn down with a frame in flight. The app itself creates no VideoFrame.
  */
-const FRAMEWORK_NOISE: RegExp[] = [/^\[NUXT_E5002\](?:\n|$)/]
+const FRAMEWORK_NOISE: RegExp[] = [
+  /^\[NUXT_E5002\](?:\n|$)/,
+  /^(?:TypeError: )?Fetch API cannot load http: ?\/{1,2}\S+\/_nuxt\/builds\/meta\/[\w-]+\.json due to access control checks\.\n/,
+  /^\[JavaScript Error: "InvalidStateError: Navigated away from page"\]\n/,
+  /^A VideoFrame was garbage collected without being closed\. Applications should call close\(\) on frames when done with them to prevent stalls\.\n/,
+]
 
 export const test = base.extend<
   { allowConsoleErrors: (string | RegExp)[]; guards: Guards; secrets: Secrets; _e2eTest: TestState },
