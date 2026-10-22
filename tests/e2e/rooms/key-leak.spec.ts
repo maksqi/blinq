@@ -186,10 +186,12 @@ test.describe('key hygiene', () => {
     for (const frame of recorded.frames) expect(findIn(frame, forbiddenWithProof)).toEqual([])
 
     // 4. The database: the server stores sha256(proof) and never anything else derived from the key.
+    // The dev stack's Postgres in host mode; the Docker runner (scripts/e2e-docker.sh) names its own container.
     const url = new URL(process.env.DATABASE_URL!)
+    const postgres = process.env.E2E_POSTGRES_CONTAINER ?? 'blinq-dev-postgres-1'
     const dump = execFileSync(
       'docker',
-      ['exec', 'blinq-dev-postgres-1', 'pg_dump', '-U', decodeURIComponent(url.username), url.pathname.slice(1)],
+      ['exec', postgres, 'pg_dump', '-U', decodeURIComponent(url.username), url.pathname.slice(1)],
       { maxBuffer: 512 * 1024 * 1024 },
     )
     expect(dump.toString('utf8')).toContain(slug)

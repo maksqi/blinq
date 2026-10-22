@@ -19,8 +19,9 @@ import { HTTP_ERROR_CONSOLE, leaveCalls, newWatchedContext, openToPrejoin, press
 // (JWTs, unredacted access_token=, #k=, #t=, link fragments, cookies, password fields) apply to every line.
 // scripts/e2e.sh runs the app with LOG_LEVEL=debug; the base fixture scans app and Caddy logs after every test too.
 
-const LIVEKIT_CONTAINER = 'blinq-dev-livekit-1'
-const POSTGRES_CONTAINER = 'blinq-dev-postgres-1'
+// The shared dev stack's containers in host mode; the Docker runner (scripts/e2e-docker.sh) names its own.
+const LIVEKIT_CONTAINER = process.env.E2E_LIVEKIT_CONTAINER ?? 'blinq-dev-livekit-1'
+const POSTGRES_CONTAINER = process.env.E2E_POSTGRES_CONTAINER ?? 'blinq-dev-postgres-1'
 const ENV_SECRETS = ['APP_SECRET', 'LIVEKIT_API_SECRET', 'RECORDING_ENCRYPTION_KEY', 'ADMIN_PASSWORD', 'SMTP_PASSWORD']
 
 function publicOrigin(): string {
