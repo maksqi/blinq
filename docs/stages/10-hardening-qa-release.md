@@ -345,6 +345,12 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       orchestrator — status: fixed (pnpm overrides to source-map-js 1.2.2, vite 8.3.4, launch-editor 2.14.2, shell-quote
       1.12.0; the simple-git and @simple-git/argv-parser advisories are excepted with reasons in `pnpm-workspace.yaml`:
       @nuxt/devtools only, the fix needs simple-git 4)
+- [x] F-076 [high] infra — the release-time trivy scan found new fixable HIGH/CRITICAL issues: perl-base
+      5.36.0-7+deb12u3 in the app image (the pinned Node base had not been rebuilt) and, in Caddy, Go 1.26.8 stdlib
+      (net/http, crypto/tls), golang.org/x/net 0.58.0 and klauspost/compress 1.18.6 (orchestrator, 2026-10-22) — owner:
+      orchestrator — status: fixed (node:24.22.1-bookworm-slim; Caddy built with GOTOOLCHAIN=go1.26.10, x/net 0.60.0
+      with x/crypto 0.57.0 and x/text 0.42.0, compress 1.18.7; trivy 0.72.0 `--severity HIGH,CRITICAL
+      --ignore-unfixed`: 0 on both images; smoke-prod passed on them)
 
 ## Tests
 - API: `tests/api/security/{authz-matrix,idor,csrf,rate-limits,cookies,headers}.test.ts`.
