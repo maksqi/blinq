@@ -15,20 +15,13 @@ import { newWatchedContext, openToPrejoin } from '../join/support'
  * - Speculative prefetches (`<link rel="prefetch">`, requests with `Sec-Purpose: prefetch`) are not needed to render
  *   the page and are reported but not counted (decision).
  * - KB means 1024 bytes here, like the quality review's KiB figures (decision).
- * - A new browser context has an empty HTTP cache, so every resource is a network transfer.
+ * - A new browser context has an empty HTTP cache, so every file is a network transfer. Chromium lists a preloaded file
+ *   twice (the `link` preload and the `script` that runs it, served from the HTTP cache), so each file counts once.
  *
  * One engine is enough to measure bytes (Chromium; Firefox negotiates the same encodings).
  */
 const KB = 1024
 const BUDGET = { initial: 200 * KB, prejoin: 450 * KB }
-
-/**
- * pending finding: F-043 — initial JS is over budget on main (quality review, gzip: `/` 222 KiB, `/login` 225 KiB,
- * `/m/<slug>` 464 KiB): one large chunk with livekit-client and all call code loads everywhere. Until the fix-ui and
- * fix-call splits merge, a page listed here that is over its budget is reported and skipped instead of failing; under
- * its budget it is asserted like every other page. Remove the entries once F-043 is fixed.
- */
-const PENDING_F043 = new Set(['/', '/login', '/m/<slug>'])
 
 /** Scripts that never count against the pre-join budget (loaded only for effects, or the frame-cryptor worker). */
 const EXCLUDED = [
@@ -108,18 +101,25 @@ async function measure(page: Page, label: string, log: RequestLog): Promise<Meas
       loadEventEnd: Math.round(navigation?.loadEventEnd ?? 0),
     }
   })
-  const scripts: ScriptResource[] = entries
-    .filter((entry) => isScript(entry.url))
-    .map(({ url, ...entry }) => {
-      const path = new URL(url).pathname
-      const purposes = log.purposes.get(path) ?? []
-      return {
-        path,
-        ...entry,
-        encoding: log.encodings.get(path) ?? 'unknown',
-        prefetch: purposes.length > 0 && purposes.every((purpose) => purpose.includes('prefetch')),
-      }
+  const byPath = new Map<string, ScriptResource>()
+  for (const { url, ...entry } of entries.filter((entry) => isScript(entry.url))) {
+    const path = new URL(url).pathname
+    const seen = byPath.get(path)
+    if (seen) {
+      // Entries come in start order: keep the first start and the largest size of the same file.
+      seen.encoded = Math.max(seen.encoded, entry.encoded)
+      seen.decoded = Math.max(seen.decoded, entry.decoded)
+      continue
+    }
+    const purposes = log.purposes.get(path) ?? []
+    byPath.set(path, {
+      path,
+      ...entry,
+      encoding: log.encodings.get(path) ?? 'unknown',
+      prefetch: purposes.length > 0 && purposes.every((purpose) => purpose.includes('prefetch')),
     })
+  }
+  const scripts = [...byPath.values()]
   const counted: ScriptResource[] = []
   const excluded: Measurement['excluded'] = []
   for (const script of scripts) {
@@ -170,12 +170,6 @@ async function report(measurement: Measurement, budget: number): Promise<void> {
 }
 
 function enforce(measurement: Measurement, budget: number): void {
-  if (measurement.totalBytes > budget && PENDING_F043.has(measurement.page)) {
-    test.skip(
-      true,
-      `pending finding: F-043 — ${measurement.page} loads ${kib(measurement.totalBytes)} KiB of JS (budget ${kib(budget)} KiB)`,
-    )
-  }
   expect(measurement.totalBytes, `${measurement.page}: compressed JS within ${kib(budget)} KiB`).toBeLessThanOrEqual(
     budget,
   )

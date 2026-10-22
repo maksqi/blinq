@@ -307,6 +307,9 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       `Could not unset participant on cryptor` for the peer's tracks. livekit-client 2.22.3 uses `createEncodedStreams`
       on Chromium (cryptor state per track id); Firefox recovers. `call/reconnect` keeps it as `fixme` for `chromium`
       only, so nightly `msedge` fails it (fix-server 3ed23b5) — owner: fix-call — status: open
+- [ ] F-068 [low] e2e — `perf/budget` counted 16 preloaded files twice (Chromium lists the `link` preload and the
+      `script` entry, the second from the HTTP cache), so the call route summed to 477.9 KiB and was skipped as
+      "pending F-043"; counted once it is 438.9 KiB (docs) — owner: orchestrator — status: open
 
 ## Tests
 - API: `tests/api/security/{authz-matrix,idor,csrf,rate-limits,cookies,headers}.test.ts`.
