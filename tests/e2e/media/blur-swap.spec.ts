@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test'
 import { expect, test } from '../fixtures'
 import { inboundVideo, waitForPhase, waitForRemoteFrames, type JoinedPeer } from '../fixtures/livekit'
 import {
+  BLUR_TIMEOUT,
   chooseBlur,
   closeSettings,
   mediaState,
@@ -75,7 +76,9 @@ test.describe('background blur', () => {
     await camera.click()
     await expect(camera).toHaveAttribute('aria-pressed', 'false')
     await camera.click()
-    await expect(camera).toHaveAttribute('aria-pressed', 'true')
+    // Turning the camera on restarts the blur pipeline before the button reports it. With software WebGL (SwiftShader,
+    // llvmpipe in the Docker runner) that took 1-13 s in Firefox and about 7 s in Chromium: the blur timeout applies.
+    await expect(camera).toHaveAttribute('aria-pressed', 'true', { timeout: BLUR_TIMEOUT })
     await waitForBlur(page, 'strong')
     await waitForRemoteFrames(peer.page, host.identity, 10)
 

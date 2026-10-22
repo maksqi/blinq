@@ -395,12 +395,17 @@ interface TestState {
  *   200 ms sleep, and the app's Join click calls `room.startAudio()`. Leaving the page soon after a Join logs it.
  * - Chromium logs "A VideoFrame was garbage collected without being closed" when the blur pipeline of
  *   @livekit/track-processors 0.8 is torn down with a frame in flight. The app itself creates no VideoFrame.
+ * - Firefox aborts the `play()` that livekit-client's `setProcessor` starts on its processor `<video>` (it warns
+ *   "failed to play processor element, retrying" on every blur start), and when livekit's single retry 100 ms later
+ *   fails too it logs "failed to play processor element". @livekit/track-processors' render loop calls `play()` on that
+ *   element every second while it is paused, so blur still starts (the blur specs check its frames).
  */
 const FRAMEWORK_NOISE: RegExp[] = [
   /^\[NUXT_E5002\](?:\n|$)/,
   /^(?:TypeError: )?Fetch API cannot load http: ?\/{1,2}\S+\/_nuxt\/builds\/meta\/[\w-]+\.json due to access control checks\.\n/,
   /^\[JavaScript Error: "InvalidStateError: Navigated away from page"\]\n/,
   /^A VideoFrame was garbage collected without being closed\. Applications should call close\(\) on frames when done with them to prevent stalls\.\n/,
+  /^failed to play processor element(?: JSHandle@object)?\n/,
 ]
 
 export const test = base.extend<
