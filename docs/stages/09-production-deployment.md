@@ -257,7 +257,7 @@ real DNS, real certificates and a relay-only call with UDP blocked.
 ### 9a
 - [x] [agent-manual] `smoke-prod.sh` passes locally (Docker VM on macOS) — evidence: `sh scripts/smoke-prod.sh`
       output in the report.
-- [ ] [auto] `smoke-prod.sh` passes in CI — evidence: docker.yml smoke job (first run after the user pushes).
+- [ ] [user] `smoke-prod.sh` passes in CI — evidence: docker.yml smoke job (first run after the user pushes).
 - [x] [auto] `ss -tulpn` shows only the intended public listeners and loopback-only 3000/7880/2020 — evidence:
       listener assertion in `scripts/smoke-prod.sh`.
 - [x] [agent-manual] A clean `docker build` works from committed files only — evidence:

@@ -20,7 +20,7 @@ and verifying a stage.
 | [07](stages/07-media-processing.md) | Media processing | media-fx | W2 | 05 | done |
 | [08](stages/08-recording.md) | Recording | recording-server (W1), recording-client (W2) | W1 / W2 | 01; client also 05 and 08 (server) | done |
 | [09](stages/09-production-deployment.md) | Production deployment | infra (9a, W1); user (9b) | W1 / final | 01 (9a); 10 (9b) | 9a done; 9b needs a real server (user) |
-| [10](stages/10-hardening-qa-release.md) | Hardening, QA and release | e2e, security-review, quality-review, fix agents, docs | W3 | all | in progress |
+| [10](stages/10-hardening-qa-release.md) | Hardening, QA and release | e2e, security-review, quality-review, fix agents, docs | W3 | all | done (`v1.0.0-rc.1`); `[user]` items with 9b |
 
 ## Dependency graph
 
@@ -269,3 +269,15 @@ tracked as F-001 to F-011 in the Stage 10 Findings list):
   decodes nothing) recorded. Gate on main: lint, typecheck, 1528 unit tests, check:english. Maintainer's decision:
   every Playwright run happens inside Docker (fake-media sounds on the Mac). Second-half agents `e2e-docker` and `docs`
   start from the commit after this entry; `fix-call` (F-067) starts after `e2e-docker` merges.
+- 2026-10-22 — Second half of W3 merged: `e2e-docker` (Playwright in a Docker runner: one network namespace with the
+  app, Caddy, LiveKit, Postgres and Mailpit; PulseAudio null sink, Xvfb for Firefox WebGL), `docs` (measured sizing,
+  LiveKit limits, browser support, troubleshooting, CHANGELOG), `fix-call` (F-067: livekit-client lost every event of
+  a full reconnect's last 2 s, so no E2EE receiver was set up; patched, plus a receiver guard and watchdog) and
+  `e2e-stabilize` (hydration-aware navigation in the fixtures, Firefox lost-commit recovery, narrow noise allowances).
+  Orchestrator: F-065 fixed with LiveKit send-side bandwidth estimation (6 of 6 runs froze without it), F-068 to F-076
+  (budget double count, hydration races, host-dialog focus, participants refetch while leaving, dependency and image
+  advisories found at release time: overrides, Node 24.22.1, Caddy with Go 1.26.10). Release gate on 58ccbe9 and the
+  docs commit after it: lint, typecheck, 1559 unit tests, 1842 API tests, build + check-build, check:english, audit,
+  actionlint, gitleaks, full Docker E2E 483 passed / 0 failed / 5 skipped, nightly specs (join p50 296 ms, p95 595 ms;
+  degradation; long recording), smoke-prod passed, trivy 0 on both images, clean `docker build`. `package.json` 1.0.0,
+  local tag `v1.0.0-rc.1` (not pushed). Open: Stage 9b on a real server, the manual browser matrix, CI after the push.

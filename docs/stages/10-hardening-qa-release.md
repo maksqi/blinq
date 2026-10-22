@@ -1,6 +1,6 @@
 # Stage 10 — Hardening, QA and release
 
-Status: in progress
+Status: done for the agents (2026-10-22, `v1.0.0-rc.1`); `[user]` items and CI after the push remain
 Owner(s): `e2e`, `security-review` (read-only), `quality-review` (read-only), fix agents (grouped by owner area),
 `docs` (Wave 3); `orchestrator` (findings list, frozen files, release)
 Depends on: every earlier stage merged (Stages 01–08 and 9a)
@@ -37,106 +37,109 @@ tagged locally (never pushed without the user).
 
 ## Tasks
 ### Kickoff
-- [ ] Record the W3 base SHA in `docs/ROADMAP.md`; every W3 agent checks it with `git merge-base --is-ancestor`.
-- [ ] Feature freeze: a change without a finding id or a test task is rejected at merge.
+- [x] Record the W3 base SHA in `docs/ROADMAP.md`; every W3 agent checks it with `git merge-base --is-ancestor`.
+- [x] Feature freeze: a change without a finding id or a test task is rejected at merge.
 ### Security review (`security-review`, read-only)
 Each item gets a verdict (pass, finding) and an evidence pointer. Findings carry severity (critical, high, medium,
 low), location, reproduction and owner area.
-- [ ] Authorization: a table-driven matrix of every route in `docs/API.md` × {anonymous, guest of room A, guest of room
+- [x] Authorization: a table-driven matrix of every route in `docs/API.md` × {anonymous, guest of room A, guest of room
       B, participant, co-host, host, other user, admin, disabled user, user with a pending password change} →
       expected status. A route missing from the table fails the test (the route list is read from `server/api/**`).
-- [ ] IDOR: rooms, room invites, meetings, recordings (metadata, file, chunks, delete), sessions, lobby requests,
+- [x] IDOR: rooms, room invites, meetings, recordings (metadata, file, chunks, delete), sessions, lobby requests,
       participant identities from another room, admin resources.
-- [ ] CSRF: every mutating route with no `Origin`, a foreign `Origin` and `Sec-Fetch-Site: cross-site` → 403
+- [x] CSRF: every mutating route with no `Origin`, a foreign `Origin` and `Sec-Fetch-Site: cross-site` → 403
       `CSRF_REJECTED`; the webhook is exempt but rejects a missing or bad signature; GET routes change nothing.
-- [ ] Rate limits: login, register, password-reset request, email verification, invite preview/accept, join info,
+- [x] Rate limits: login, register, password-reset request, email verification, invite preview/accept, join info,
       join with a room password, lobby cap per room, SSE connections, chunk uploads → 429 with `Retry-After`; IPv6
       keyed by /64; an `X-Forwarded-For` sent from outside through Caddy never changes the limiter key.
-- [ ] Headers and CSP on every page type: SSR pages (home, login, dashboard, admin), the client-only call page, error
+- [x] Headers and CSP on every page type: SSR pages (home, login, dashboard, admin), the client-only call page, error
       pages (403, 404, 500), API JSON, recording files (`sandbox; default-src 'none'`, `no-store`), `/_nuxt/*`
       assets and Caddy-generated responses (redirect, webhook 404, 413).
-- [ ] Cookies: `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`; rotation on login and
+- [x] Cookies: `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`; rotation on login and
       privilege change; logout, password change and disable revoke; guest cookies are per room.
-- [ ] Secrets in logs: after the full E2E run with `LOG_LEVEL=debug`, collect app, Caddy, LiveKit and Postgres logs
+- [x] Secrets in logs: after the full E2E run with `LOG_LEVEL=debug`, collect app, Caddy, LiveKit and Postgres logs
       and scan for every secret the run produced (collected by the fixtures) plus patterns: JWTs (`eyJ`), unredacted
       `access_token=`, `#k=`, `#t=`, and the `.env` secret values.
-- [ ] Dependencies: `pnpm audit --prod --audit-level high` exits 0; the full `pnpm audit` is triaged in the report.
-- [ ] Containers: `docker inspect` (user, `CapDrop`, `SecurityOpt`, `ReadonlyRootfs`, `NetworkMode`);
+- [x] Dependencies: `pnpm audit --prod --audit-level high` exits 0; the full `pnpm audit` is triaged in the report.
+- [x] Containers: `docker inspect` (user, `CapDrop`, `SecurityOpt`, `ReadonlyRootfs`, `NetworkMode`);
       `trivy image --severity HIGH,CRITICAL --ignore-unfixed` on both images (run from its container) (decision); no
       secrets in image layers (`docker history --no-trunc`, no `.env` in `/app`).
-- [ ] Supply chain: frozen lockfile, explicit `allowBuilds`, `minimumReleaseAge`, every `uses:` pinned to a 40-hex SHA,
+- [x] Supply chain: frozen lockfile, explicit `allowBuilds`, `minimumReleaseAge`, every `uses:` pinned to a 40-hex SHA,
       images pinned by version, `@mediapipe/tasks-vision` at 0.10.14, gitleaks over the full history, and zero
       browser requests to any host other than `DOMAIN` during E2E.
-- [ ] E2EE: the key never leaves the browser (Stage 04 check repeated on the real flows), unencrypted publishers are
+- [x] E2EE: the key never leaves the browser (Stage 04 check repeated on the real flows), unencrypted publishers are
       blocked, chat is ciphertext on the wire, no RPC methods are registered, token grants match the role table.
-- [ ] Recording input: malicious fixtures rejected, oversize chunks 413, quotas enforced, the ffmpeg process
+- [x] Recording input: malicious fixtures rejected, oversize chunks 413, quotas enforced, the ffmpeg process
       environment holds no secret (read `/proc/<pid>/environ` during a job).
-- [ ] Web: open redirects (`/login?redirect=//evil.example`), XSS payloads in display names, room names and chat
+- [x] Web: open redirects (`/login?redirect=//evil.example`), XSS payloads in display names, room names and chat
       render as text, `Host`/`X-Forwarded-Host` never reach emailed links.
-- [ ] Abuse: a login flood keeps other routes responsive (argon2 semaphore); SSE and lobby caps hold; body limits hold.
+- [x] Abuse: a login flood keeps other routes responsive (argon2 semaphore); SSE and lobby caps hold; body limits hold.
 ### Quality review (`quality-review`, read-only)
-- [ ] Correctness: races (invite `max_uses`, double admit, concurrent first joins create one meeting), webhook
+- [x] Correctness: races (invite `max_uses`, double admit, concurrent first joins create one meeting), webhook
       idempotency, error paths map to documented codes, no unhandled rejections, injected clocks used everywhere.
-- [ ] Resource hygiene: listeners, timers, workers and media tracks released on leave; heap stable after 20
+- [x] Resource hygiene: listeners, timers, workers and media tracks released on leave; heap stable after 20
       join/leave cycles in one tab.
-- [ ] Performance: N+1 queries, missing indexes (`EXPLAIN` on hot queries), route splitting, lazy MediaPipe and RNNoise.
-- [ ] Code: dead code, stray TODOs, `any`, duplicated logic that belongs in `shared/`, drift from `docs/API.md`.
-- [ ] UI copy: English, sentence case, errors say what happened and what to do.
+- [x] Performance: N+1 queries, missing indexes (`EXPLAIN` on hot queries), route splitting, lazy MediaPipe and RNNoise.
+- [x] Code: dead code, stray TODOs, `any`, duplicated logic that belongs in `shared/`, drift from `docs/API.md`.
+- [x] UI copy: English, sentence case, errors say what happened and what to do.
 ### Fix agents
-- [ ] One agent per owner area works through its findings; every fix ships with a regression test and the reviewer's
+- [x] One agent per owner area works through its findings; every fix ships with a regression test and the reviewer's
       reproduction is re-run.
-- [ ] Medium and low findings are fixed or accepted with a reason in the Findings list; high and critical are fixed.
+- [x] Medium and low findings are fixed or accepted with a reason in the Findings list; high and critical are fixed.
 ### E2E on real flows (`e2e`)
-- [ ] Fixtures in `tests/e2e/fixtures/`: `loginAs(role)`, `createRoom(options)`, `inviteLink(room)`,
+- [x] Fixtures in `tests/e2e/fixtures/`: `loginAs(role)`, `createRoom(options)`, `inviteLink(room)`,
       `openAsGuest(link)`, `admit(requestName)`, merged with `mergeTests`; still against `pnpm build:test` for stats
       hooks.
-- [ ] Move the call specs from `/dev/call` to `/m/[slug]`: E2EE Chromium ↔ Firefox, wrong key, join time, layers,
+- [x] Move the call specs from `/dev/call` to `/m/[slug]`: E2EE Chromium ↔ Firefox, wrong key, join time, layers,
       screen share, hotkeys, reconnect. The harness stays only for what the UI cannot express (unencrypted publisher).
-- [ ] Full journeys: first admin login → forced change → invite user → user creates room → guest joins via
+- [x] Full journeys: first admin login → forced change → invite user → user creates room → guest joins via
       lobby → host actions → chat → recording → playback → admin audit entry.
-- [ ] WebKit UI-only on Linux (`@ui`): auth pages, dashboard, and the call page's unsupported-browser screen.
-- [ ] nightly.yml (request): macOS WebKit and Edge jobs, non-blocking (`continue-on-error`).
-- [ ] `tests/smoke-prod/call.spec.ts`: replace the transport-level call with the real UI flow on the prod image.
+- [x] WebKit UI-only on Linux (`@ui`): auth pages, dashboard, and the call page's unsupported-browser screen.
+- [x] nightly.yml (request): macOS WebKit and Edge jobs, non-blocking (`continue-on-error`). (Edge job in nightly.yml;
+      macOS WebKit moved to the backlog and the manual matrix: GitHub's macOS runners have no Docker.)
+- [x] `tests/smoke-prod/call.spec.ts`: replace the transport-level call with the real UI flow on the prod image.
 ### Network degradation (`e2e`)
-- [ ] `tests/e2e/network/degradation.spec.ts` (nightly): Chromium receiver; CDP `Network.emulateNetworkConditions` with
+- [x] `tests/e2e/network/degradation.spec.ts` (nightly): Chromium receiver; CDP `Network.emulateNetworkConditions` with
       the WebRTC parameters (`packetLoss: 5`, `latency: 150`, throughput 500 kbit/s) for 60 s; `tc netem` on the
       runner's LiveKit interface as the fallback and for Firefox (decision).
-- [ ] Assert: the inbound video layer or bitrate drops within 20 s; no `Disconnected` and no end screen during the
+- [x] Assert: the inbound video layer or bitrate drops within 20 s; no `Disconnected` and no end screen during the
       60 s; after the conditions are lifted the high layer returns within 30 s.
 ### 25-participant load (`e2e`)
-- [ ] SFU: `lk room create` first (`auto_create` is off), then `lk load-test --room <name> --video-publishers 25
+- [x] SFU: `lk room create` first (`auto_create` is off), then `lk load-test --room <name> --video-publishers 25
       --audio-publishers 25 --duration 5m` against `wss://DOMAIN` from a separate machine, plus one on-box run
       against loopback. Scenarios: one full room; one full room with a 1080p15 screen share; rooms of 10 added until
-      80 % CPU.
-- [ ] Browser swarm `tests/load/swarm.ts` (Playwright library): N guests per load host join one room through the real
+      80 % CPU. (On-box runs only, the maintainer's decision; the run from a separate machine against `wss://DOMAIN`
+      is `[user]` with Stage 9b.)
+- [x] Browser swarm `tests/load/swarm.ts` (Playwright library): N guests per load host join one room through the real
       invite flow with fake media and E2EE; records per-bot join time and first remote frame; an observer tab checks
       the 5×5 grid and decoded frame rates.
-- [ ] Record per run: host size, versions, CPU, RAM, ingress/egress Mbit/s (`docker stats`, `sar -n DEV`), packet
+- [x] Record per run: host size, versions, CPU, RAM, ingress/egress Mbit/s (`docker stats`, `sar -n DEV`), packet
       loss, join time p50/p95.
-- [ ] `docs/PERFORMANCE.md`: method, raw results, derived sizing (per 25-person room and per vCPU), recommended LiveKit
+- [x] `docs/PERFORMANCE.md`: method, raw results, derived sizing (per 25-person room and per vCPU), recommended LiveKit
       `limit.num_tracks` and `limit.bytes_per_sec` (request to `infra` owner area via a fix agent).
 ### Performance budget (`e2e`)
-- [ ] `tests/e2e/perf/budget.spec.ts` sums `encodedBodySize` of script resources (decision on the limits):
+- [x] `tests/e2e/perf/budget.spec.ts` sums `encodedBodySize` of script resources (decision on the limits):
       - `/` and `/login`: initial JS ≤ 200 KB compressed.
       - `/m/[slug]` up to the pre-join screen (without MediaPipe, RNNoise and the E2EE worker): ≤ 450 KB.
-- [ ] Join time (click → first remote frame): p50 < 1.5 s and p95 < 3 s nightly; < 6 s on the PR gate.
+- [x] Join time (click → first remote frame): p50 < 1.5 s and p95 < 3 s nightly; < 6 s on the PR gate.
 ### Accessibility and responsive polish (`e2e` finds, fix agents fix)
-- [ ] `tests/e2e/a11y/*.spec.ts` with `@axe-core/playwright` (new dev dependency, request): every page type in light
+- [x] `tests/e2e/a11y/*.spec.ts` with `@axe-core/playwright` (new dev dependency, request): every page type in light
       and dark theme, plus pre-join, in-call grid, chat, participants and lobby panels, dialogs.
-- [ ] Keyboard-only journeys: login, create room, join, mute/unmute, share screen, leave; visible focus; dialogs
+- [x] Keyboard-only journeys: login, create room, join, mute/unmute, share screen, leave; visible focus; dialogs
       trap and restore focus; `aria-live` for toasts, chat and lobby requests; `prefers-reduced-motion` respected.
-- [ ] Responsive: every page type at 375, 768 and 1440 px (no horizontal overflow, controls in the viewport, touch
+- [x] Responsive: every page type at 375, 768 and 1440 px (no horizontal overflow, controls in the viewport, touch
       targets ≥ 44 px on phones), `@responsive` on the `mobile-chromium` project.
 ### Docs final and release (`docs`, `orchestrator`)
-- [ ] `docs`: README install re-verified against the smoke stack; sizing from `docs/PERFORMANCE.md` replaces every
+- [x] `docs`: README install re-verified against the smoke stack; sizing from `docs/PERFORMANCE.md` replaces every
       estimate in README and `docs/DEPLOYMENT.md` (`TODO(stage-10)`); troubleshooting updated from the fixes;
       `docs/TESTING.md` gets the manual browser matrix table (Chrome, Edge, Firefox, Safari macOS, Safari iOS, Android
-      Chrome) for the user to fill in.
+      Chrome) for the user to fill in. (The install path is what `scripts/smoke-prod.sh` runs: `init-env.sh`,
+      `preflight.sh`, `docker compose up -d --wait`, the first admin and a real-flow call; passed on 58ccbe9.)
 - [x] `docs`: drift in `docs/API.md`, `docs/SECURITY.md` or `docs/ARCHITECTURE.md` goes to the orchestrator as exact
       edits.
 - [x] `docs`: `CHANGELOG.md` in Keep a Changelog format with `## [1.0.0] - <date>`: Added, Security, Known limitations
       (the non-goals from `docs/SECURITY.md`).
-- [ ] `orchestrator`: `package.json` version `1.0.0`; full gate; commit `chore(release): v1.0.0`; local tag
+- [x] `orchestrator`: `package.json` version `1.0.0`; full gate; commit `chore(release): v1.0.0`; local tag
       `v1.0.0-rc.1` for Stage 9b (decision), then `git tag -a v1.0.0 -m "blinq v1.0.0"` after 9b passes. No push.
 ### Findings (orchestrator-maintained)
 Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — status: open | fixed <sha> | accepted
@@ -317,11 +320,13 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       timer no longer outlives its attempt; 9605486: only receivers with a decrypting transform are used, the recording
       compositor included, and a receiver watchdog reports the rest; `call/reconnect` both ways on chromium and
       firefox, 12/12 with `--repeat-each=3` in the Docker runner)
-- [ ] F-068 [low] e2e — `perf/budget` counted 16 preloaded files twice (Chromium lists the `link` preload and the
+- [x] F-068 [low] e2e — `perf/budget` counted 16 preloaded files twice (Chromium lists the `link` preload and the
       `script` entry, the second from the HTTP cache), so the call route summed to 477.9 KiB and was skipped as
-      "pending F-043"; counted once it is 438.9 KiB (docs) — owner: orchestrator — status: open
-- [ ] F-069 [low] e2e — `auth/first-admin` fills the login form right after `goto`, before hydration (the race
-      `security/log-scan` and `rooms/key-leak` had, fixed by e2e-docker c18f641) — owner: orchestrator — status: open
+      "pending F-043"; counted once it is 438.9 KiB (docs) — owner: orchestrator — status: fixed (bf78f9c: each file
+      counts once and every budget is enforced; call route 438.7 KiB in the release run)
+- [x] F-069 [low] e2e — `auth/first-admin` fills the login form right after `goto`, before hydration (the race
+      `security/log-scan` and `rooms/key-leak` had, fixed by e2e-docker c18f641) — owner: orchestrator — status: fixed
+      (17cbfbe; e2e-stabilize then made every watched navigation wait for hydration in the fixtures)
 - [x] F-070 [low] ui — text typed into a form before hydration is wiped when the page hydrates (seen on `/login`
       in the Docker runner) (e2e-docker) — owner: orchestrator — status: accepted (submit stays disabled until
       hydration, so nothing is sent or leaked (F-020); it only costs retyping on a slow first load; backlog)
@@ -362,46 +367,53 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
 - Manual (user): Stage 9b and the browser matrix in `docs/TESTING.md`.
 
 ## Definition of Done
-- [ ] [agent-manual] Every DoD item of Stages 01–08 and 9a is checked — evidence:
+- [x] [agent-manual] Every DoD item of Stages 01–08 and 9a is checked — evidence:
       `awk '/^## Definition of Done/{d=1;next} /^## /{d=0} d && /^- \[ \]/ && !/\[user\]/' docs/stages/0*.md`
-      prints nothing (`[user]` items such as 9b are excluded until the user runs them).
-- [ ] [agent-manual] No high or critical finding is open — evidence: Findings list in this file;
-      `pnpm audit --prod --audit-level high` exits 0; trivy output in the report.
-- [ ] [auto] Authorization, IDOR, CSRF, rate-limit, cookie and header suites pass — evidence:
-      `pnpm test:api -- security`.
-- [ ] [auto] Headers and CSP are correct on every page type with zero violations — evidence:
-      `pnpm test:e2e -- security/headers`.
-- [ ] [auto] No secret appears in app, Caddy, LiveKit or Postgres logs after the full run — evidence:
-      `pnpm test:e2e -- security/log-scan`.
-- [ ] [auto] The browser makes no request to any host other than `DOMAIN` — evidence:
-      `pnpm test:e2e -- security/external-requests`.
-- [ ] [auto] Real-flow E2E passes on Chromium and Firefox; WebKit UI-only passes on Linux — evidence: e2e.yml
-      (`chromium`, `firefox`, `webkit-ui` projects).
-- [ ] [auto] macOS WebKit and Edge jobs run nightly (non-blocking) — evidence: nightly.yml job results.
-- [ ] [auto] Under degradation, quality drops, nothing disconnects for 60 s, and it recovers within 30 s — evidence:
-      `pnpm test:e2e -- network/degradation` in nightly.yml.
-- [ ] [agent-manual] A 25-participant room is measured with `lk load-test` and the browser swarm — evidence:
-      `docs/PERFORMANCE.md` results table with hardware and versions.
-- [ ] [agent-manual] README and `docs/DEPLOYMENT.md` sizing comes from `docs/PERFORMANCE.md` — evidence:
-      `grep -rn 'TODO(stage-10)\|estimate' README.md docs/DEPLOYMENT.md` shows no unmeasured size.
-- [ ] [auto] The performance budget holds (initial JS ≤ 200 KB, call route ≤ 450 KB) — evidence:
-      `pnpm test:e2e -- perf/budget`.
-- [ ] [auto] Join time p50 < 1.5 s and p95 < 3 s nightly; < 6 s on the PR gate — evidence: nightly.yml join-time job,
-      `pnpm test:e2e -- call/join-time`.
-- [ ] [auto] axe reports no serious or critical violation on any page type in either theme — evidence:
-      `pnpm test:e2e -- a11y`.
-- [ ] [auto] No horizontal overflow; controls stay in the viewport at 375/768/1440 px on every page type — evidence:
-      `pnpm test:e2e -- responsive`.
-- [ ] [agent-manual] Keyboard-only journeys work — evidence: `tests/e2e/a11y/keyboard.spec.ts` plus a local check
-      in the report.
-- [ ] [agent-manual] `smoke-prod.sh` passes with the real-flow call — evidence: `sh scripts/smoke-prod.sh`.
-- [ ] [agent-manual] The full local gate is green on the release commit — evidence: `pnpm lint && pnpm typecheck &&
-      pnpm test && pnpm test:api && pnpm build && pnpm check:english && pnpm test:e2e` and a clean `docker build`.
+      prints nothing (`[user]` items such as 9b are excluded until the user runs them). Done 2026-10-22: prints nothing (Stage 09's CI smoke job is `[user]`).
+- [x] [agent-manual] No high or critical finding is open — evidence: Findings list in this file;
+      `pnpm audit --prod --audit-level high` exits 0; trivy output in the report. Done: every high finding is fixed (F-015, F-036, F-052, F-067, F-075, F-076); audit exits 0;
+      trivy 0.72.0 HIGH/CRITICAL (fixable) 0 on blinq-app and blinq-caddy (58ccbe9).
+- [x] [auto] Authorization, IDOR, CSRF, rate-limit, cookie and header suites pass — evidence:
+      `pnpm test:api -- security`. Done: `pnpm test:api` 1842 passed, 4 skipped (LiveKit-only cases).
+- [x] [auto] Headers and CSP are correct on every page type with zero violations — evidence:
+      `pnpm test:e2e -- security/headers`. Done: Docker runner, full PR set.
+- [x] [auto] No secret appears in app, Caddy, LiveKit or Postgres logs after the full run — evidence:
+      `pnpm test:e2e -- security/log-scan`. Done: Docker runner, full PR set.
+- [x] [auto] The browser makes no request to any host other than `DOMAIN` — evidence:
+      `pnpm test:e2e -- security/external-requests`. Done: Docker runner, full PR set.
+- [x] [auto] Real-flow E2E passes on Chromium and Firefox; WebKit UI-only passes on Linux — evidence: e2e.yml
+      (`chromium`, `firefox`, `webkit-ui` projects). Done locally: the full PR set in the Docker runner (chromium, firefox,
+      webkit-ui, mobile-chromium) 483 passed, 0 failed, 5 skipped on 3a36acc; e2e.yml runs after the push (`[user]`).
+- [ ] [auto] macOS WebKit and Edge jobs run nightly (non-blocking) — evidence: nightly.yml job results. (Edge runs after
+      the push; macOS WebKit is backlog, covered by the manual matrix.)
+- [x] [auto] Under degradation, quality drops, nothing disconnects for 60 s, and it recovers within 30 s — evidence:
+      `pnpm test:e2e -- network/degradation` in nightly.yml. Done: Docker runner with send-side BWE, 6 of 6 plus the release run
+      (F-065).
+- [x] [agent-manual] A 25-participant room is measured with `lk load-test` and the browser swarm — evidence:
+      `docs/PERFORMANCE.md` results table with hardware and versions. Done (on-box, §5).
+- [x] [agent-manual] README and `docs/DEPLOYMENT.md` sizing comes from `docs/PERFORMANCE.md` — evidence:
+      `grep -rn 'TODO(stage-10)\|estimate' README.md docs/DEPLOYMENT.md` shows no unmeasured size. Done: prints nothing.
+- [x] [auto] The performance budget holds (initial JS ≤ 200 KB, call route ≤ 450 KB) — evidence:
+      `pnpm test:e2e -- perf/budget`. Done: `/` 152.4 KiB, `/login` 192.7 KiB, call route 438.7 KiB (F-068).
+- [x] [auto] Join time p50 < 1.5 s and p95 < 3 s nightly; < 6 s on the PR gate — evidence: nightly.yml join-time job,
+      `pnpm test:e2e -- call/join-time`. Done: nightly mode in the Docker runner, p50 296 ms, p95 595 ms.
+- [x] [auto] axe reports no serious or critical violation on any page type in either theme — evidence:
+      `pnpm test:e2e -- a11y`. Done: Docker runner, full PR set.
+- [x] [auto] No horizontal overflow; controls stay in the viewport at 375/768/1440 px on every page type — evidence:
+      `pnpm test:e2e -- responsive`. Done: Docker runner, full PR set.
+- [x] [agent-manual] Keyboard-only journeys work — evidence: `tests/e2e/a11y/keyboard.spec.ts` plus a local check
+      in the report. Done: the spec passes in Chromium and Firefox; focus returns after the
+      host dialogs (F-072).
+- [x] [agent-manual] `smoke-prod.sh` passes with the real-flow call — evidence: `sh scripts/smoke-prod.sh`. Done: passed on 58ccbe9 (images with trivy 0).
+- [x] [agent-manual] The full local gate is green on the release commit — evidence: `pnpm lint && pnpm typecheck &&
+      pnpm test && pnpm test:api && pnpm build && pnpm check:english && pnpm test:e2e` and a clean `docker build`. Done: lint, typecheck, 1559 unit tests, 1842 API tests, build +
+      `check-build.mjs production`, check:english, the Docker E2E above and `git archive HEAD | docker build` (58ccbe9).
 - [ ] [user] CI is green on the release commit — evidence: ci.yml, e2e.yml and docker.yml runs after the user pushes.
-- [ ] [agent-manual] Docs are final and consistent — evidence: no `TODO(stage-` left
-      (`grep -rn 'TODO(stage-' README.md docs`), `pnpm check:english`, every relative link resolves.
-- [ ] [agent-manual] `CHANGELOG.md` has the 1.0.0 entry and the tag exists only locally — evidence:
-      `git tag -l 'v1.0.0*'`; `git ls-remote --tags origin` does not list it.
+- [x] [agent-manual] Docs are final and consistent — evidence: no `TODO(stage-` left
+      (`grep -rn 'TODO(stage-' README.md docs`), `pnpm check:english`, every relative link resolves. Done: only quotes of the marker in
+      stage files; 62 relative links, 0 problems.
+- [x] [agent-manual] `CHANGELOG.md` has the 1.0.0 entry and the tag exists only locally — evidence:
+      `git tag -l 'v1.0.0*'`; `git ls-remote --tags origin` does not list it. Done: `v1.0.0-rc.1` (local only).
 - [ ] [user] README install followed verbatim on a fresh server — evidence: Stage 9b DoD.
 - [ ] [user] Manual browser matrix completed — evidence: table in `docs/TESTING.md`.
 
