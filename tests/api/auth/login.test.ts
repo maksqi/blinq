@@ -1,11 +1,12 @@
 /**
  * POST /api/auth/login: cookie and session on success, identical answers for wrong passwords and unknown emails,
- * exponential backoff (429 + Retry-After, never a lockout), disabled accounts, unverified accounts in domain mode.
+ * exponential backoff (429 + Retry-After, never a lockout, race-free under parallel guesses), the bounded hashing
+ * queue, disabled accounts, unverified accounts in domain mode.
  */
-import { eq } from 'drizzle-orm'
+import { eq, like } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { loginThrottle as throttleTable, sessions, users } from '../../../server/database/schema'
-import { normalizeIp } from '../../../server/utils/client-ip'
+import { limiterKeysForIp, normalizeIp } from '../../../server/utils/client-ip'
 import { hashToken } from '../../../server/utils/crypto'
 import { createClient, createUser, expectApiError, loginAs, searchMessages, testDb, uniqueEmail } from '../_harness'
 import {
@@ -71,29 +72,75 @@ describe('POST /api/auth/login', () => {
     const api = createClient()
     for (let i = 0; i < 6; i++) expectApiError(await signIn(api, user.email, WRONG), 401, 'AUTH_INVALID_CREDENTIALS')
 
-    // Even the right password waits now, from this IP and from any other (the email key).
+    // Even the right password waits now, from this IP.
     const blocked = await signIn(api, user.email, user.password)
     expectApiError(blocked, 429, 'RATE_LIMITED')
     const retryAfter = Number(blocked.headers.get('retry-after'))
     expect(retryAfter).toBeGreaterThanOrEqual(1)
     expect(retryAfter).toBeLessThanOrEqual(2)
     expect(blocked.body.data.details).toEqual({ retryAfter })
-    expectApiError(await signIn(createClient(), user.email, user.password), 429, 'RATE_LIMITED')
 
     await sleep(retryAfter * 1_000 + 300)
     expect((await signIn(api, user.email, user.password)).status).toBe(200)
     const keys = await testDb()
       .select()
       .from(throttleTable)
-      .where(eq(throttleTable.key, `email:${user.email}`))
-    expect(keys).toEqual([]) // success resets the email key
+      .where(like(throttleTable.key, `%email:${user.email}`))
+    expect(keys).toEqual([]) // success resets the account keys (email and network + email)
+  })
+
+  it('never locks the owner out: guesses from other networks leave a clean network alone (F-017)', async () => {
+    const user = await createUser()
+    // Strangers drive the account key far into backoff, from many networks.
+    for (let i = 0; i < 8; i++) {
+      expectApiError(await signIn(createClient(), user.email, WRONG), 401, 'AUTH_INVALID_CREDENTIALS')
+    }
+    const attacker = createClient()
+    expectApiError(await signIn(attacker, user.email, WRONG), 401, 'AUTH_INVALID_CREDENTIALS')
+    // A network that already failed for the account waits for the account backoff...
+    expectApiError(await signIn(attacker, user.email, WRONG), 429, 'RATE_LIMITED')
+    // ...but the owner, from a network that never failed for it, signs in at once.
+    expect((await signIn(createClient(), user.email, user.password)).status).toBe(200)
   })
 
   it('counts unknown emails the same way, so 429s reveal nothing', async () => {
     const email = uniqueEmail('nobody')
     const api = createClient()
     for (let i = 0; i < 6; i++) expectApiError(await signIn(api, email, WRONG), 401, 'AUTH_INVALID_CREDENTIALS')
-    expectApiError(await signIn(createClient(), email, WRONG), 429, 'RATE_LIMITED')
+    expectApiError(await signIn(api, email, WRONG), 429, 'RATE_LIMITED')
+    // Unknown and known accounts alike: a fresh network gets one try, then the account backoff applies to it.
+    const other = createClient()
+    expectApiError(await signIn(other, email, WRONG), 401, 'AUTH_INVALID_CREDENTIALS')
+    expectApiError(await signIn(other, email, WRONG), 429, 'RATE_LIMITED')
+  })
+
+  it('counts parallel guesses before checking them: 40 at once give 6 × 401, the rest 429 (F-016)', async () => {
+    const user = await createUser()
+    const api = createClient()
+    const results = await Promise.all(Array.from({ length: 40 }, () => signIn(api, user.email, WRONG)))
+    const statuses = results.map((res) => res.status)
+    expect(statuses.filter((status) => status === 401)).toHaveLength(6)
+    expect(statuses.filter((status) => status === 429)).toHaveLength(34)
+    for (const res of results.filter((r) => r.status === 429)) {
+      expectApiError(res, 429, 'RATE_LIMITED')
+      expect(Number(res.headers.get('retry-after'))).toBeGreaterThanOrEqual(1)
+    }
+  })
+
+  it('answers a flood with quick 429s instead of queueing every hash (bounded argon2 queue, F-016)', async () => {
+    // One attempt per network, so neither the backoff nor the in-flight cap applies: only the hashing queue.
+    const clients = Array.from({ length: 200 }, () => createClient())
+    const flood = await Promise.all(clients.map((client) => signIn(client, uniqueEmail('flood'), WRONG)))
+    const limited = flood.flatMap((res, i) => (res.status === 429 ? [{ res, client: clients[i]! }] : []))
+    expect(limited.length).toBeGreaterThan(0)
+    for (const { res } of limited) {
+      expectApiError(res, 429, 'RATE_LIMITED')
+      expect(res.headers.get('retry-after')).toBe('1')
+    }
+    for (const res of flood.filter((r) => r.status !== 429)) expectApiError(res, 401, 'AUTH_INVALID_CREDENTIALS')
+    // A refused attempt was never checked, so it was given back: its network carries no failure.
+    const network = limiterKeysForIp(normalizeIp(limited[0]!.client.ip)).net
+    expect(await testDb().select().from(throttleTable).where(eq(throttleTable.key, network))).toEqual([])
   })
 
   it('throttles one IP across emails (ip:/net: key)', async () => {

@@ -123,14 +123,15 @@ describe('password reset', () => {
     expect(await searchMessages(`to:"${user.email}"`)).toHaveLength(3)
   })
 
-  it('clears the login backoff of the address', async () => {
+  it('clears the login backoff of the account', async () => {
     const user = await createUser()
-    const api = createClient()
-    for (let i = 0; i < 6; i++) await signIn(api, user.email, 'wrong-password-000')
-    expectApiError(await signIn(createClient(), user.email, user.password), 429, 'RATE_LIMITED')
+    // 9 networks fail once each: the account waits 16 s for every network that already failed for it.
+    const clients = Array.from({ length: 9 }, () => createClient())
+    for (const client of clients) await signIn(client, user.email, 'wrong-password-000')
+    expectApiError(await signIn(clients[0]!, user.email, user.password), 429, 'RATE_LIMITED')
     await request(user.email)
     expect((await confirm(await mailToken(user.email, '/reset-password', SUBJECT))).status).toBe(200)
-    expect((await signIn(createClient(), user.email, NEW_PASSWORD)).status).toBe(200)
+    expect((await signIn(clients[0]!, user.email, NEW_PASSWORD)).status).toBe(200)
   })
 })
 

@@ -54,8 +54,21 @@ describe('login (limiter `login`: database backoff per email and per IP)', () =>
     const api = createClient()
     for (let i = 0; i < 6; i++) expectApiError(await login(api, user.email, WRONG_PASSWORD), 401, 'AUTH_INVALID_CREDENTIALS')
     expectRateLimited(await login(api, user.email, user.password), 2)
-    // The email key holds from any other IP too.
-    expectRateLimited(await login(createClient(), user.email, user.password), 2)
+    // The email key slows only networks that already failed for the account, so nobody can lock the owner out from
+    // elsewhere (F-017): a clean network signs in at once.
+    expect((await login(createClient(), user.email, user.password)).status).toBe(200)
+  })
+
+  it('backs the account off for every network that failed for it, and counts parallel guesses (F-016, F-017)', async () => {
+    const user = await createUser()
+    const networks = Array.from({ length: 6 }, () => createClient())
+    for (const api of networks) expectApiError(await login(api, user.email, WRONG_PASSWORD), 401, 'AUTH_INVALID_CREDENTIALS')
+    expectRateLimited(await login(networks[0]!, user.email, user.password), 2)
+    // 40 parallel guesses from one network are counted before they are checked: 6 are evaluated, the rest wait.
+    const api = createClient()
+    const burst = await Promise.all(Array.from({ length: 40 }, () => login(api, uniqueEmail('burst'), WRONG_PASSWORD)))
+    expect(burst.filter((res) => res.status === 401)).toHaveLength(6)
+    for (const res of burst.filter((r) => r.status !== 401)) expectRateLimited(res, 2)
   })
 
   it('backs off one IP (its /64) across many emails, but not other networks', async () => {
@@ -243,29 +256,71 @@ describe('waiting-room cap (50 per room, 409 LOBBY_FULL)', () => {
   })
 })
 
-describe('waiting-room streams', () => {
-  // pending finding: no limit on concurrent waiting-room SSE streams (per request or per IP); docs/API.md defines none.
-  it.skip('caps concurrent SSE connections for one waiting request with 429 RATE_LIMITED and Retry-After', async () => {
+describe('waiting-room streams (F-019: 2 per request, the oldest closed; 50 per network, then 429)', () => {
+  /** Opens a waiting-room stream; resolves with the status and, for 200, a promise of the stream's end. */
+  async function openStream(api: ApiClient, requestId: string, controllers: AbortController[]) {
+    const controller = new AbortController()
+    controllers.push(controller)
+    const res = await fetch(new URL(`/api/join/requests/${requestId}/events`, apiBaseUrl()), {
+      headers: { cookie: api.cookieHeader(), 'x-forwarded-for': api.ip },
+      signal: controller.signal,
+    })
+    if (res.status !== 200) {
+      return { status: res.status, retryAfter: res.headers.get('retry-after'), body: await res.json(), ended: Promise.resolve(true) }
+    }
+    const reader = res.body!.getReader()
+    const ended = (async () => {
+      try {
+        for (;;) if ((await reader.read()).done) return true
+      } catch {
+        return false // aborted by the test
+      }
+    })()
+    return { status: res.status, retryAfter: null, body: undefined, ended }
+  }
+
+  it('keeps only the 2 newest streams of one waiting request open', async () => {
     const owner = await createUser()
     const room = await createRoom(owner, { waitingRoom: true })
     await startMeeting(room, owner)
     const guest = await joinGuest(room, { expectStatus: 202 })
     const controllers: AbortController[] = []
     try {
-      const statuses = await Promise.all(
-        Array.from({ length: 20 }, async () => {
-          const controller = new AbortController()
-          controllers.push(controller)
-          const res = await fetch(new URL(`/api/join/requests/${guest.res.body.requestId}/events`, apiBaseUrl()), {
-            headers: { cookie: guest.api.cookieHeader(), 'x-forwarded-for': guest.api.ip },
-            signal: controller.signal,
-          })
-          return { status: res.status, retryAfter: res.headers.get('retry-after') }
-        }),
-      )
-      const limited = statuses.filter((s) => s.status === 429)
-      expect(limited.length).toBeGreaterThan(0)
-      expect(limited.every((s) => /^\d+$/.test(s.retryAfter ?? ''))).toBe(true)
+      const streams = []
+      for (let i = 0; i < 20; i++) streams.push(await openStream(guest.api, guest.res.body.requestId, controllers))
+      expect(streams.every((s) => s.status === 200)).toBe(true)
+      // The server closed the 18 older ones; the 2 newest stay open.
+      const closedByServer = await Promise.all(streams.slice(0, 18).map((s) => s.ended))
+      expect(closedByServer.every(Boolean)).toBe(true)
+      const stillOpen = await Promise.race([
+        Promise.any(streams.slice(18).map((s) => s.ended)).then(() => false),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 300)),
+      ])
+      expect(stillOpen).toBe(true)
+    } finally {
+      for (const controller of controllers) controller.abort()
+    }
+  })
+
+  it('caps concurrent streams per network with 429 RATE_LIMITED and Retry-After', async () => {
+    const room = await createRoom(await createUser(), { waitingRoom: true })
+    const user = await createUser()
+    const api = await loginAs(user)
+    const requests = await Promise.all(
+      Array.from({ length: 26 }, () => createParticipant({ room, meeting: null, userId: user.id, status: 'waiting' })),
+    )
+    const controllers: AbortController[] = []
+    try {
+      for (const request of requests.slice(0, 25)) {
+        for (let i = 0; i < 2; i++) expect((await openStream(api, request.id, controllers)).status).toBe(200)
+      }
+      const limited = await openStream(api, requests[25]!.id, controllers)
+      expect(limited.status).toBe(429)
+      expect(limited.body).toMatchObject({ statusCode: 429, data: { code: 'RATE_LIMITED' } })
+      expect(limited.retryAfter).toMatch(/^\d+$/)
+      expect(limited.body.data.details).toEqual({ retryAfter: Number(limited.retryAfter) })
+      // Another network is not affected.
+      expect((await openStream(await loginAs(user), requests[25]!.id, controllers)).status).toBe(200)
     } finally {
       for (const controller of controllers) controller.abort()
     }

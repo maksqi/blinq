@@ -70,7 +70,7 @@ export async function bootstrap(options: { email?: string; password?: string; no
 
     const [admins] = await tx.select({ n: count() }).from(users).where(eq(users.role, 'admin'))
     if ((admins?.n ?? 0) > 0) {
-      await setSystemFlag(BOOTSTRAP_FLAG, { at: now.toISOString(), reason: 'admin_exists' }, tx)
+      await setSystemFlag(BOOTSTRAP_FLAG, { at: now.toISOString(), reason: 'admin_exists' }, tx, now)
       return { status: 'marked' } as const
     }
 
@@ -94,7 +94,7 @@ export async function bootstrap(options: { email?: string; password?: string; no
       .returning({ id: users.id })
     const userId = user!.id
     await tx.insert(authIdentities).values({ userId, provider: 'password', subject: userId, email: credentials.email })
-    await setSystemFlag(BOOTSTRAP_FLAG, { at: now.toISOString(), userId }, tx)
+    await setSystemFlag(BOOTSTRAP_FLAG, { at: now.toISOString(), userId }, tx, now)
     await audit(
       null,
       { action: 'system.bootstrap', targetType: 'user', targetId: userId, details: { email: credentials.email } },

@@ -28,16 +28,21 @@ export async function changePassword(
 ): Promise<AuthUser> {
   const { user, session } = await getAuth(event)
   if (!user || !session) throw apiError('UNAUTHENTICATED', 401)
-  // Own key per account (not the email's login key, which strangers can drive up), plus the caller's IP.
+  // Own key per account (not the email's login key, which strangers can drive up), plus the caller's IP. The attempt
+  // is reserved before the check, like a login, so parallel guesses see each other (F-016).
   const accountKey = passwordChangeThrottleKey(user.id)
-  const keys = [accountKey, limiterKeysForIp(getClientIp(event)).net]
-  await loginThrottle.assertAllowed(event, keys, now)
+  const attempt = await loginThrottle.reserve(event, [{ key: accountKey }, { key: limiterKeysForIp(getClientIp(event)).net }], now)
 
-  const row = await findUserById(user.id)
-  if (!row?.passwordHash || !(await verifyPassword(row.passwordHash, input.currentPassword))) {
-    await loginThrottle.recordFailure(keys, now)
-    throw apiError('AUTH_INVALID_CREDENTIALS', 401)
+  let verified: boolean
+  try {
+    const row = await findUserById(user.id)
+    verified = !!row?.passwordHash && (await verifyPassword(row.passwordHash, input.currentPassword))
+  } catch (error) {
+    await loginThrottle.release(attempt)
+    throw error
   }
+  if (!verified) throw apiError('AUTH_INVALID_CREDENTIALS', 401)
+  await loginThrottle.succeeded(attempt, [accountKey])
   assertPasswordAllowed(input.newPassword, { current: input.currentPassword })
 
   const updated = await setPassword(user.id, input.newPassword, { mustChangePassword: false, now })
@@ -55,7 +60,6 @@ export async function changePassword(
     { action: 'auth.password_changed', actorUserId: user.id, targetType: 'user', targetId: user.id },
     { now },
   )
-  await loginThrottle.clear([accountKey])
   return toAuthUser(updated)
 }
 

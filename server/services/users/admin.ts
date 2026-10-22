@@ -25,9 +25,10 @@
  *   mails it instead (503 as above). Audit `admin.user_password_reset`.
  * - `revokeUserSessions(id, actor)` → `{ revoked }`: all sessions, `user.revoked`. Audit `admin.user_sessions_revoked`.
  * - `deleteUser(id, actor, { beforeDelete })`: 409 `CONFLICT` for `self` and `last_admin`, 404 `NOT_FOUND`.
- *   `beforeDelete(user)` runs after the checks and before the row is deleted (end live meetings, delete recording
- *   files: the rows cascade, the files would not). Then the row is deleted (sessions, identities, rooms, recordings
- *   cascade), `user.revoked` is published. Audit `admin.user_deleted` (email kept in `details`).
+ *   After the checks the user leaves every live call (`removeUserFromLiveCalls`, while their rows still carry the user
+ *   id), then `beforeDelete(user)` runs (end live meetings, delete recording files: the rows cascade, the files would
+ *   not). Then the row is deleted (sessions, identities, rooms, recordings cascade), `user.revoked` is published.
+ *   Audit `admin.user_deleted` (email kept in `details`).
  */
 import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, or, type SQL } from 'drizzle-orm'
 import type { z } from 'zod'
@@ -46,9 +47,10 @@ import { apiError } from '../../utils/api-error'
 import { setSessionCookie } from '../../utils/cookies'
 import { getAuth } from '../../utils/auth'
 import { eventBus } from '../../utils/event-bus'
-import { clearLoginFailures, emailThrottleKey } from '../../utils/limiter'
+import { clearAccountThrottle } from '../../utils/limiter'
 import { hashPassword } from '../../utils/password'
 import { audit } from '../audit/audit'
+import { removeUserFromLiveCalls } from '../calls/revocation'
 import { tempPasswordMessage } from '../mail/messages'
 import { isSmtpConfigured, sendMailOr503 } from '../mail/transport'
 import { evictUserFromSessionCache, revokeAllForUser, rotateSession } from '../session/sessions'
@@ -293,7 +295,7 @@ export async function resetPasswordByAdmin(
     return updated
   })
   await revokeAllForUser(id)
-  await clearLoginFailures([emailThrottleKey(row.email)])
+  await clearAccountThrottle(row.email)
   return { tempPassword: sendEmail ? null : tempPassword, emailed: sendEmail }
 }
 
@@ -333,6 +335,9 @@ export async function deleteUser(
       .where(and(eq(users.role, 'admin'), isNull(users.disabledAt)))
     if ((enabled?.n ?? 0) <= 1) throw lastAdminConflict()
   }
+  // While `call_participants.user_id` still points at the account: the delete sets it to null, and the `user.revoked`
+  // event published afterwards would find nothing to remove (F-001).
+  await removeUserFromLiveCalls(id, now)
   await options.beforeDelete?.(target)
 
   await useDb().transaction(async (tx) => {

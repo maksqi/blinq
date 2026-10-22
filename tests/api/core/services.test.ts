@@ -3,9 +3,11 @@
  * cleanup and retention (injected clocks; rows are unique per test).
  */
 import { randomBytes } from 'node:crypto'
-import { eq, inArray } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 import { H3Error } from 'h3'
 import { describe, expect, it } from 'vitest'
+import { useDb } from '../../../server/database/client'
+import { AdvisoryLockTimeoutError, withAdvisoryLocks } from '../../../server/utils/advisory-lock'
 import {
   auditLog,
   callParticipants,
@@ -29,11 +31,12 @@ import {
 } from '../../../server/services/settings/settings'
 import { hashToken, randomToken } from '../../../server/utils/crypto'
 import {
-  checkLoginAllowed,
+  clearAccountThrottle,
   clearLoginFailures,
   emailThrottleKey,
-  loginThrottleKeys,
-  recordLoginFailure,
+  loginAttemptKeys,
+  refundAttempt,
+  reserveAttempt,
 } from '../../../server/utils/limiter'
 import {
   createAdmin,
@@ -58,35 +61,106 @@ const DAY = 24 * 3_600_000
 const ago = (ms: number) => new Date(Date.now() - ms)
 
 describe('login backoff (login_throttle)', () => {
-  it('allows 5 failures, then waits 2^(n-5) s per key; success clears only the email key', async () => {
-    const email = uniqueEmail()
-    const keys = loginThrottleKeys(email, uniqueIp())
+  const rowOf = async (key: string) => (await testDb().select().from(loginThrottle).where(eq(loginThrottle.key, key)))[0]
+
+  it('reserves 5 free attempts, then waits 2^(n-5) s; refused attempts are not counted', async () => {
+    const keys = [{ key: emailThrottleKey(uniqueEmail()) }]
     const now = new Date()
-    for (let i = 0; i < 5; i++) await recordLoginFailure(keys, now)
-    expect(await checkLoginAllowed(keys, now)).toEqual({ allowed: true, retryAfterMs: 0 })
-
-    await recordLoginFailure(keys, now)
-    expect(await checkLoginAllowed(keys, now)).toEqual({ allowed: false, retryAfterMs: 2_000 })
-    await recordLoginFailure(keys, now)
-    expect(await checkLoginAllowed(keys, now)).toEqual({ allowed: false, retryAfterMs: 4_000 })
-    expect((await checkLoginAllowed(keys, new Date(now.getTime() + 4_000))).allowed).toBe(true)
-
-    await clearLoginFailures([emailThrottleKey(email)])
-    expect((await checkLoginAllowed(keys, now)).allowed).toBe(false) // the IP key still counts
-    await clearLoginFailures(keys)
-    expect((await checkLoginAllowed(keys, now)).allowed).toBe(true)
+    for (let i = 0; i < 6; i++) expect((await reserveAttempt(keys, now)).allowed).toBe(true)
+    expect(await reserveAttempt(keys, now)).toEqual({ allowed: false, retryAfterMs: 2_000 })
+    expect((await rowOf(keys[0]!.key))!.failures).toBe(6)
+    const later = new Date(now.getTime() + 2_000)
+    expect((await reserveAttempt(keys, later)).allowed).toBe(true)
+    expect(await reserveAttempt(keys, later)).toEqual({ allowed: false, retryAfterMs: 4_000 })
+    await clearLoginFailures(keys.map((spec) => spec.key))
+    expect(await rowOf(keys[0]!.key)).toBeUndefined()
   })
 
-  it('counts parallel failures exactly and forgets failures older than 24 h', async () => {
+  it('serializes parallel attempts: 40 at once reserve exactly 6 (F-016)', async () => {
+    const keys = loginAttemptKeys(uniqueEmail(), uniqueIp())
+    const results = await Promise.all(Array.from({ length: 40 }, () => reserveAttempt(keys)))
+    expect(results.filter((result) => result.allowed)).toHaveLength(6)
+    for (const spec of keys) expect((await rowOf(spec.key))!.failures).toBe(6)
+    await clearLoginFailures(keys.map((spec) => spec.key))
+  })
+
+  it('refunds an attempt: the wait it started and the row age come back, empty rows go', async () => {
+    const network = { key: `ip:${uniqueIp(4)}-${randomBytes(4).toString('hex')}` }
+    const start = ago(3_600_000)
+    for (let i = 0; i < 5; i++) await reserveAttempt([network], start)
+    const before = await rowOf(network.key)
+    const decision = await reserveAttempt([network])
+    expect(decision.allowed).toBe(true)
+    expect((await rowOf(network.key))!.nextAllowedAt).not.toBeNull() // the 6th would start a wait
+    if (decision.allowed) await refundAttempt(decision.reservation)
+    expect(await rowOf(network.key)).toEqual(before)
+
+    const fresh = { key: `ip:${randomBytes(8).toString('hex')}` }
+    const once = await reserveAttempt([fresh])
+    if (once.allowed) await refundAttempt(once.reservation)
+    expect(await rowOf(fresh.key)).toBeUndefined()
+    await clearLoginFailures([network.key])
+  })
+
+  it('forgets failures older than 24 h', async () => {
     const key = emailThrottleKey(uniqueEmail())
-    await Promise.all(Array.from({ length: 8 }, () => recordLoginFailure([key])))
-    const [row] = await testDb().select().from(loginThrottle).where(eq(loginThrottle.key, key))
-    expect(row!.failures).toBe(8)
+    for (let i = 0; i < 3; i++) await reserveAttempt([{ key }])
     await testDb().update(loginThrottle).set({ updatedAt: ago(25 * 3_600_000) }).where(eq(loginThrottle.key, key))
-    await recordLoginFailure([key])
-    const [reset] = await testDb().select().from(loginThrottle).where(eq(loginThrottle.key, key))
-    expect(reset!.failures).toBe(1)
+    await reserveAttempt([{ key }])
+    expect((await rowOf(key))!.failures).toBe(1)
     await clearLoginFailures([key])
+  })
+
+  it('clears an account: its email key and network pair keys, not the network keys', async () => {
+    const email = `under_score%${uniqueEmail()}`
+    const keys = loginAttemptKeys(email, uniqueIp())
+    const lookalike = loginAttemptKeys(`underXscoreX${email.slice('under_score%'.length)}`, uniqueIp())
+    await reserveAttempt(keys)
+    await reserveAttempt(lookalike)
+    await clearAccountThrottle(email)
+    expect(await rowOf(keys[0]!.key)).toBeDefined()
+    expect(await rowOf(keys[1]!.key)).toBeUndefined()
+    expect(await rowOf(keys[2]!.key)).toBeUndefined()
+    // LIKE wildcards in the address are escaped.
+    for (const spec of lookalike) expect(await rowOf(spec.key)).toBeDefined()
+    await clearLoginFailures([...keys, ...lookalike].map((spec) => spec.key))
+  })
+})
+
+describe('advisory locks without parked connections (F-046)', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('serializes holders of a key, and its waiters never starve the pool', async () => {
+    const key = `test:${randomBytes(8).toString('hex')}`
+    const order: string[] = []
+    const holder = withAdvisoryLocks(useDb(), [key], async () => {
+      order.push('holder:start')
+      await sleep(400)
+      order.push('holder:end')
+    })
+    await sleep(50)
+    // More waiters than the pool has connections (10).
+    const waiters = Array.from({ length: 15 }, (_, i) =>
+      withAdvisoryLocks(useDb(), [key], async () => void order.push(`waiter:${i}`)),
+    )
+    await sleep(50)
+    const started = Date.now()
+    await useDb().execute(sql`select 1`)
+    expect(Date.now() - started).toBeLessThan(250) // a blocking lock would park all 10 connections until 400 ms
+    await Promise.all([holder, ...waiters])
+    expect(order.slice(0, 2)).toEqual(['holder:start', 'holder:end'])
+    expect(order).toHaveLength(17)
+  })
+
+  it('gives up after waitMs with AdvisoryLockTimeoutError', async () => {
+    const key = `test:${randomBytes(8).toString('hex')}`
+    const holder = withAdvisoryLocks(useDb(), [key], () => sleep(300))
+    await sleep(30)
+    await expect(withAdvisoryLocks(useDb(), [key], async () => 'never', { waitMs: 80 })).rejects.toBeInstanceOf(
+      AdvisoryLockTimeoutError,
+    )
+    await holder
+    expect(await withAdvisoryLocks(useDb(), [key, `${key}:2`], async () => 'free again')).toBe('free again')
   })
 })
 
@@ -96,12 +170,13 @@ describe('settings service', () => {
     try {
       const before = await getSettings()
       const keysBefore = (await testDb().select({ key: settings.key }).from(settings)).map((r) => r.key)
-      const next = await updateSettings({ 'limits.maxRoomsPerUser': 7 }, admin.id)
+      const at = new Date('2026-09-30T08:00:00Z')
+      const next = await updateSettings({ 'limits.maxRoomsPerUser': 7 }, admin.id, at)
       expect(next['limits.maxRoomsPerUser']).toBe(7)
       expect(next['guests.allowed']).toBe(before['guests.allowed'])
       expect((await getSettings())['limits.maxRoomsPerUser']).toBe(7)
       const [row] = await testDb().select().from(settings).where(eq(settings.key, 'limits.maxRoomsPerUser'))
-      expect(row).toMatchObject({ value: 7, updatedBy: admin.id })
+      expect(row).toMatchObject({ value: 7, updatedBy: admin.id, updatedAt: at }) // the injected clock (F-047)
       const rows = await testDb().select({ key: settings.key }).from(settings)
       expect(rows.map((r) => r.key).sort()).toEqual([...new Set([...keysBefore, 'limits.maxRoomsPerUser'])].sort())
     } finally {
@@ -121,7 +196,9 @@ describe('settings service', () => {
   it('keeps system flags out of getSettings', async () => {
     const key = `system.test_${randomBytes(4).toString('hex')}` as const
     try {
-      await setSystemFlag(key, { on: true })
+      const at = new Date('2026-09-30T08:00:00Z')
+      await setSystemFlag(key, { on: true }, undefined, at)
+      expect((await testDb().select().from(settings).where(eq(settings.key, key)))[0]!.updatedAt).toEqual(at)
       expect(await getSystemFlag(key)).toEqual({ on: true })
       invalidateSettingsCache()
       expect(JSON.stringify(await getSettings())).not.toContain(key)

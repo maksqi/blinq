@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { csrfRejected, isApiPath, isProbePath, normalizedPath, passwordChangeExempt } from './request-guards'
+import {
+  API_RESPONSE_HEADERS,
+  bodyLimitDecision,
+  bodyLimitExempt,
+  csrfRejected,
+  isApiPath,
+  isProbePath,
+  normalizedPath,
+  passwordChangeExempt,
+} from './request-guards'
 
 const publicOrigin = 'https://meet.example.test'
 const check = (method: string, path: string, origin?: string, secFetchSite?: string) =>
@@ -86,5 +95,43 @@ describe('passwordChangeExempt', () => {
     ['GET', '/api/auth/password'],
   ])('blocks %s %s', (method, path) => {
     expect(passwordChangeExempt(method, path)).toBe(false)
+  })
+})
+
+describe('API response headers', () => {
+  it('mark every API response no-store, same-origin and nosniff (F-028)', () => {
+    expect(API_RESPONSE_HEADERS).toEqual({
+      'Cache-Control': 'no-store',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'X-Content-Type-Options': 'nosniff',
+    })
+  })
+})
+
+describe('bodyLimitDecision (F-025)', () => {
+  const decide = (method: string, path: string, contentLength?: string, transferEncoding?: string) =>
+    bodyLimitDecision({ method, path, contentLength, transferEncoding, limit: 1_000 })
+
+  it('lets declared lengths up to the limit through and rejects larger ones, PATCH included', () => {
+    expect(decide('POST', '/api/rooms', '1000')).toBe('ok')
+    expect(decide('POST', '/api/rooms', '1001')).toBe('too_large')
+    expect(decide('PATCH', '/api/rooms/x', '5000')).toBe('too_large')
+    expect(decide('DELETE', '/api/rooms/x', 'nonsense')).toBe('too_large')
+  })
+
+  it('counts bodies without Content-Length', () => {
+    expect(decide('POST', '/api/auth/login', undefined, 'chunked')).toBe('count')
+    expect(decide('PUT', '/api/rooms/x/key', '', 'chunked')).toBe('count')
+    expect(decide('POST', '/api/auth/logout')).toBe('ok')
+  })
+
+  it('skips safe methods, pages and the routes that stream their own bodies', () => {
+    expect(decide('GET', '/api/rooms', undefined, 'chunked')).toBe('ok')
+    expect(decide('POST', '/login', undefined, 'chunked')).toBe('ok')
+    expect(decide('PUT', '/api/recordings/r1/chunks/3', '20000000')).toBe('ok')
+    expect(decide('POST', '/api/webhooks/livekit', undefined, 'chunked')).toBe('ok')
+    expect(decide('POST', '/api/recordings/r1/complete', '5000')).toBe('too_large')
+    expect(bodyLimitExempt('put', '/api/recordings/r1/chunks/3')).toBe(true)
+    expect(bodyLimitExempt('POST', '/api/recordings/r1/chunks/3')).toBe(false)
   })
 })

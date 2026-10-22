@@ -9,6 +9,8 @@
  *   since nothing else accepts mutations (decision).
  * - `passwordChangeExempt(method, path)`: the only `/api/**` routes a user with `mustChangePassword` may call.
  * - `isProbePath(path)`: `/api/health` and `/api/ready` (no session lookup, no request log).
+ * - `API_RESPONSE_HEADERS`: set on every `/api/**` response.
+ * - `bodyLimitDecision(...)`: how the 1 MB body limit applies (declared length, or counting a chunked body).
  */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
@@ -24,6 +26,13 @@ const PASSWORD_CHANGE_EXEMPT = new Set([
 ])
 
 const PROBES = new Set(['/api/health', '/api/ready'])
+
+/** Headers of every `/api/**` response, errors included (docs/API.md §1, F-028). */
+export const API_RESPONSE_HEADERS = {
+  'Cache-Control': 'no-store',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'X-Content-Type-Options': 'nosniff',
+} as const
 
 export function normalizedPath(url: string): string {
   const path = url.split(/[?#]/, 1)[0]!.replace(/\/{2,}/g, '/')
@@ -53,6 +62,39 @@ export function csrfRejected(input: {
   if (SAFE_METHODS.has(method) || isCsrfExempt(method, input.path)) return false
   if (input.origin !== input.publicOrigin) return true
   return input.secFetchSite !== undefined && input.secFetchSite !== 'same-origin'
+}
+
+/** Request bodies of `/api/**` (docs/API.md §1: 1 MB, the same number as nuxt-security's limit). */
+export const API_BODY_LIMIT_BYTES = 1_000_000
+
+const PAYLOAD_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+
+/** Routes that stream their raw body and enforce their own limit: recording chunks and the LiveKit webhook. */
+export function bodyLimitExempt(method: string, path: string): boolean {
+  const upper = method.toUpperCase()
+  if (upper === 'POST' && path === '/api/webhooks/livekit') return true
+  return upper === 'PUT' && /^\/api\/recordings\/[^/]+\/chunks\/[^/]+$/.test(path)
+}
+
+/**
+ * How the body limit applies to a request (F-025). nuxt-security checks only `Content-Length` and only on POST, PUT
+ * and DELETE, so: a declared length above the limit → `too_large`; a body without `Content-Length` (chunked) →
+ * `count` (read it while counting bytes); everything else → `ok`.
+ */
+export function bodyLimitDecision(input: {
+  method: string
+  path: string
+  contentLength: string | undefined
+  transferEncoding: string | undefined
+  limit: number
+}): 'ok' | 'too_large' | 'count' {
+  if (!isApiPath(input.path) || !PAYLOAD_METHODS.has(input.method.toUpperCase())) return 'ok'
+  if (bodyLimitExempt(input.method, input.path)) return 'ok'
+  if (input.contentLength !== undefined && input.contentLength.trim() !== '') {
+    const length = Number(input.contentLength)
+    return Number.isFinite(length) && length <= input.limit ? 'ok' : 'too_large'
+  }
+  return input.transferEncoding ? 'count' : 'ok'
 }
 
 export function passwordChangeExempt(method: string, path: string): boolean {

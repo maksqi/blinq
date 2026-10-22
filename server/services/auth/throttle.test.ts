@@ -6,15 +6,41 @@ import {
   backoffDelayMs,
   createLoginThrottle,
   emailThrottleKey,
-  loginThrottleKeys,
+  loginAttemptKeys,
   memoryThrottleStore,
+  type AttemptKey,
 } from './throttle'
 
 const SECOND = 1_000
+const T0 = new Date('2026-09-28T10:00:00Z')
 
 function event() {
   const req = new IncomingMessage(new Socket())
   return createEvent(req, new ServerResponse(req))
+}
+
+function setup() {
+  const store = memoryThrottleStore()
+  return { store, throttle: createLoginThrottle(store) }
+}
+
+/** A wrong password: reserved, and nothing else (the failure stays counted). */
+async function fail(throttle: ReturnType<typeof setup>['throttle'], keys: AttemptKey[], now = T0) {
+  await throttle.reserve(event(), keys, now)
+}
+
+/** `count` wrong passwords 20 minutes apart (longer than any wait they start), the last one at `end`. */
+async function failMany(throttle: ReturnType<typeof setup>['throttle'], keys: AttemptKey[], count: number, end = T0) {
+  for (let i = count - 1; i >= 0; i--) await fail(throttle, keys, new Date(end.getTime() - i * 20 * 60 * SECOND))
+}
+
+async function refusal(promise: Promise<unknown>): Promise<H3Error> {
+  const error = await promise.then(
+    () => undefined,
+    (err: unknown) => err,
+  )
+  expect(error).toBeInstanceOf(H3Error)
+  return error as H3Error
 }
 
 describe('backoff curve', () => {
@@ -32,82 +58,122 @@ describe('backoff curve', () => {
   })
 })
 
-describe('login throttle keys', () => {
-  it('uses the lowercased email plus the IPv4 address', () => {
-    expect(loginThrottleKeys(' Alice@Example.TEST ', '203.0.113.9')).toEqual([
-      'email:alice@example.test',
-      'ip:203.0.113.9',
+describe('login attempt keys', () => {
+  it('uses the network, the network + account pair and the account (conditional on the pair)', () => {
+    expect(loginAttemptKeys(' Alice@Example.TEST ', '203.0.113.9')).toEqual([
+      { key: 'ip:203.0.113.9' },
+      { key: 'ip:203.0.113.9|email:alice@example.test' },
+      { key: 'email:alice@example.test', onlyAfterFailuresOf: 'ip:203.0.113.9|email:alice@example.test' },
     ])
   })
 
   it('aggregates IPv6 clients by /64 (net: keys)', () => {
-    const a = loginThrottleKeys('a@example.test', '2001:db8:1:2::5')
-    const b = loginThrottleKeys('a@example.test', '2001:db8:1:2:ffff:1:2:3')
-    expect(a[1]).toBe('net:2001:db8:1:2::/64')
-    expect(b[1]).toBe(a[1])
-    expect(loginThrottleKeys('a@example.test', '2001:db8:1:3::5')[1]).toBe('net:2001:db8:1:3::/64')
+    const a = loginAttemptKeys('a@example.test', '2001:db8:1:2::5')
+    const b = loginAttemptKeys('a@example.test', '2001:db8:1:2:ffff:1:2:3')
+    expect(a[0]!.key).toBe('net:2001:db8:1:2::/64')
+    expect(b).toEqual(a)
+    expect(loginAttemptKeys('a@example.test', '2001:db8:1:3::5')[0]!.key).toBe('net:2001:db8:1:3::/64')
   })
 })
 
 describe('login throttle', () => {
-  const keys = loginThrottleKeys('victim@example.test', '198.51.100.20')
+  const keys = loginAttemptKeys('victim@example.test', '198.51.100.20')
 
   it('blocks after the free failures with a Retry-After, then lets the next attempt through', async () => {
-    const throttle = createLoginThrottle(memoryThrottleStore())
-    const t0 = new Date('2026-09-28T10:00:00Z')
-    for (let i = 0; i < 5; i++) {
-      expect((await throttle.check(keys, t0)).allowed).toBe(true)
-      await throttle.recordFailure(keys, t0)
+    const { store, throttle } = setup()
+    for (let i = 0; i < 6; i++) {
+      expect(store.peek(keys, T0).allowed).toBe(true)
+      await fail(throttle, keys) // the 6th failure starts a 2 s wait
     }
-    expect((await throttle.check(keys, t0)).allowed).toBe(true)
-    await throttle.recordFailure(keys, t0) // 6th failure: 2 s
-    expect(await throttle.check(keys, t0)).toEqual({ allowed: false, retryAfterMs: 2 * SECOND })
-    expect((await throttle.check(keys, new Date(t0.getTime() + 2 * SECOND))).allowed).toBe(true)
+    expect(store.peek(keys, T0)).toEqual({ allowed: false, retryAfterMs: 2 * SECOND })
+    expect(store.peek(keys, new Date(T0.getTime() + 2 * SECOND)).allowed).toBe(true)
 
     const e = event()
-    const error = await throttle.assertAllowed(e, keys, t0).catch((err: unknown) => err)
-    expect(error).toBeInstanceOf(H3Error)
-    expect((error as H3Error).statusCode).toBe(429)
-    expect((error as H3Error).data).toEqual({ code: 'RATE_LIMITED', details: { retryAfter: 2 } })
+    const error = await refusal(throttle.reserve(e, keys, T0))
+    expect(error.statusCode).toBe(429)
+    expect(error.data).toEqual({ code: 'RATE_LIMITED', details: { retryAfter: 2 } })
     expect(e.node.res.getHeader('retry-after')).toBe(2)
+    // A refused attempt is not counted.
+    expect(store.rows.get(keys[0]!.key)?.failures).toBe(6)
   })
 
-  it('never shortens a running wait', async () => {
-    const store = memoryThrottleStore()
-    const throttle = createLoginThrottle(store)
-    const t0 = new Date('2026-09-28T10:00:00Z')
-    for (let i = 0; i < 8; i++) await throttle.recordFailure(keys, t0) // 8 failures: 8 s
-    expect((await throttle.check(keys, t0)).retryAfterMs).toBe(8 * SECOND)
+  it('counts parallel attempts before any password is checked: the 7th of 40 waits (F-016)', async () => {
+    const { store, throttle } = setup()
+    const results = await Promise.allSettled(Array.from({ length: 40 }, () => throttle.reserve(event(), keys, T0)))
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(6)
+    for (const r of results.filter((r) => r.status === 'rejected')) {
+      expect(((r as PromiseRejectedResult).reason as H3Error).statusCode).toBe(429)
+    }
+    expect(store.rows.get(keys[0]!.key)?.failures).toBe(6)
   })
 
-  it('counts unknown and known accounts alike: the email key alone throttles every IP', async () => {
-    const throttle = createLoginThrottle(memoryThrottleStore())
-    const t0 = new Date('2026-09-28T10:00:00Z')
-    for (let i = 0; i < 6; i++)
-      await throttle.recordFailure(loginThrottleKeys('nobody@example.test', `198.51.100.${i + 1}`), t0)
-    expect((await throttle.check(loginThrottleKeys('nobody@example.test', '203.0.113.50'), t0)).allowed).toBe(false)
+  it('waits 2^(n-5) s after the n-th failure', async () => {
+    const { store, throttle } = setup()
+    await failMany(throttle, keys, 8)
+    expect(store.peek(keys, T0)).toEqual({ allowed: false, retryAfterMs: 8 * SECOND })
   })
 
-  it('resets the email key on success but keeps the IP key', async () => {
-    const store = memoryThrottleStore()
-    const throttle = createLoginThrottle(store)
-    const t0 = new Date('2026-09-28T10:00:00Z')
-    for (let i = 0; i < 7; i++) await throttle.recordFailure(keys, t0)
-    await throttle.recordSuccess('Victim@Example.test')
+  it('never locks the account owner out from a network that has not failed for it (F-017)', async () => {
+    const { store, throttle } = setup()
+    const attackers = Array.from({ length: 12 }, (_, i) => loginAttemptKeys('victim@example.test', `203.0.113.${i + 1}`))
+    for (const attacker of attackers) await fail(throttle, attacker)
+    expect(store.rows.get(emailThrottleKey('victim@example.test'))?.failures).toBe(12)
+    // The email key waits, but only for networks that already failed for the account.
+    expect(store.peek(attackers[0]!, T0).allowed).toBe(false)
+    const owner = loginAttemptKeys('victim@example.test', '198.51.100.77')
+    expect(store.peek(owner, T0).allowed).toBe(true)
+    // A wrong password from the owner's network counts; then that network waits too.
+    await fail(throttle, owner)
+    expect(store.peek(owner, T0).allowed).toBe(false)
+  })
+
+  it('counts unknown and known accounts alike', async () => {
+    const { store, throttle } = setup()
+    for (let i = 0; i < 6; i++) await fail(throttle, loginAttemptKeys('nobody@example.test', `198.51.100.${i + 1}`))
+    expect(store.rows.get(emailThrottleKey('nobody@example.test'))?.failures).toBe(6)
+    expect(store.peek(loginAttemptKeys('nobody@example.test', '198.51.100.1'), T0).allowed).toBe(false)
+  })
+
+  it('on success forgets the account keys and gives the attempt back on the network key', async () => {
+    const { store, throttle } = setup()
+    await failMany(throttle, keys, 7, new Date(T0.getTime() - 3_600_000))
+    const network = keys[0]!.key
+    const before = store.rows.get(network)!
+    const later = new Date(T0.getTime() + 60 * SECOND)
+    const attempt = await throttle.reserve(event(), keys, later)
+    await throttle.succeeded(attempt, [keys[1]!.key, keys[2]!.key])
     expect(store.rows.has(emailThrottleKey('victim@example.test'))).toBe(false)
-    expect(store.rows.get(keys[1]!)?.failures).toBe(7)
-    expect((await throttle.check(keys, t0)).allowed).toBe(false) // the IP still waits
-    expect((await throttle.check(loginThrottleKeys('victim@example.test', '198.51.100.99'), t0)).allowed).toBe(true)
+    expect(store.rows.has(keys[1]!.key)).toBe(false)
+    // The network keeps its earlier failures, wait and age: a successful login never counts against it.
+    expect(store.rows.get(network)).toEqual(before)
+  })
+
+  it('a success on a clean network leaves nothing behind, even from a shared address', async () => {
+    const { store, throttle } = setup()
+    for (let i = 0; i < 20; i++) {
+      const own = loginAttemptKeys(`user-${i}@example.test`, '198.51.100.20')
+      const attempt = await throttle.reserve(event(), own, T0)
+      await throttle.succeeded(attempt, [own[1]!.key, own[2]!.key])
+    }
+    expect(store.rows.size).toBe(0)
+  })
+
+  it('release gives an undecided attempt back on every key', async () => {
+    const { store, throttle } = setup()
+    await failMany(throttle, keys, 5)
+    const attempt = await throttle.reserve(event(), keys, T0) // the 6th: would start a wait
+    expect(store.peek(keys, T0).allowed).toBe(false)
+    await throttle.release(attempt)
+    expect(store.peek(keys, T0).allowed).toBe(true)
+    for (const spec of keys) expect(store.rows.get(spec.key)?.failures).toBe(5)
   })
 
   it('forgets failures older than 24 hours', async () => {
-    const store = memoryThrottleStore()
-    const throttle = createLoginThrottle(store)
-    const t0 = new Date('2026-09-28T10:00:00Z')
-    for (let i = 0; i < 10; i++) await throttle.recordFailure(keys, t0)
-    const later = new Date(t0.getTime() + 25 * 3_600_000)
-    await throttle.recordFailure(keys, later)
-    expect(store.rows.get(keys[0]!)?.failures).toBe(1)
-    expect((await throttle.check(keys, later)).allowed).toBe(true)
+    const { store, throttle } = setup()
+    await failMany(throttle, keys, 10)
+    const later = new Date(T0.getTime() + 25 * 3_600_000)
+    await fail(throttle, keys, later)
+    expect(store.rows.get(keys[0]!.key)?.failures).toBe(1)
+    expect(store.peek(keys, later).allowed).toBe(true)
   })
 })

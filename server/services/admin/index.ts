@@ -7,7 +7,8 @@
  *   `listAdminRoomMeetings`.
  * - `audit-log.ts`: `listAuditLog`.
  * - `settings.ts`: `getAdminSettings` (with the SMTP status), `updateAdminSettings`, `sendTestEmail`.
- * - `users.ts`: `deleteUserByAdmin` (ends live meetings, leaves live calls and deletes recording files first).
+ * - `users.ts`: `deleteUserByAdmin` (ends live meetings and deletes recording files first; the users service takes the
+ *   user out of live calls).
  */
 export { adminActor, likePattern, routeId, type AdminActor } from './common'
 export { auditFilter, listAuditLog, toAuditEntry, type AuditQuery } from './audit-log'

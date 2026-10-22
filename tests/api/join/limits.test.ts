@@ -13,7 +13,7 @@ import {
   loginAs,
   uniqueIp,
 } from '../_harness'
-import { join, joinGuest, joinUser, requestRow, setSetting, startMeeting } from '../rooms/_support'
+import { join, joinGuest, joinUser, participantRow, requestRow, setSetting, startMeeting } from '../rooms/_support'
 
 describe('lock', () => {
   it('rejects participants of a locked room; hosts and co-hosts get in', async () => {
@@ -106,6 +106,83 @@ describe('room password', () => {
     // Another IP is not affected; the host never needs the password.
     expect((await join(createClient({ ip: uniqueIp() }), room, { inviteToken: invite.token, displayName: 'G', password: 'correct horse' })).status).toBe(200)
     expect((await join(await loginAs(owner), room)).status).toBe(200)
+  })
+
+  it('counts parallel guesses before checking them: 25 at once give 6 wrong-password answers (F-026)', async () => {
+    const room = await createRoom(await createUser(), { password: 'correct horse', waitingRoom: false })
+    const invite = await createRoomInvite(room)
+    const api = createClient({ ip: uniqueIp() })
+    const results = await Promise.all(
+      Array.from({ length: 25 }, () => join(api, room, { inviteToken: invite.token, displayName: 'G', password: 'wrong' })),
+    )
+    const statuses = results.map((res) => res.status)
+    expect(statuses.filter((status) => status === 403)).toHaveLength(6)
+    expect(statuses.filter((status) => status === 429)).toHaveLength(19)
+    for (const res of results.filter((r) => r.status === 403)) expectApiError(res, 403, 'ROOM_PASSWORD_INVALID')
+    for (const res of results.filter((r) => r.status === 429)) {
+      expectApiError(res, 429, 'RATE_LIMITED')
+      expect(Number(res.headers.get('retry-after'))).toBeGreaterThanOrEqual(1)
+    }
+  })
+})
+
+describe('the network of a removed or denied participant goes through the waiting room (F-018)', () => {
+  it('sends a removed guest with a fresh cookie and the same invite to the lobby, never straight in', async () => {
+    const owner = await createUser()
+    const room = await createRoom(owner, { waitingRoom: false })
+    const host = await startMeeting(room, owner)
+    const invite = await createRoomInvite(room) // multi-use
+    const guest = await join(createClient({ ip: uniqueIp() }), room, { inviteToken: invite.token, displayName: 'G' })
+    expect(guest.status, guest.text).toBe(200)
+    const ip = (await participantRow(guest.body.identity))!.ip!
+    expect((await host.api.post(`/api/calls/${room.id}/participants/${guest.body.identity}/remove`)).status).toBe(204)
+
+    // A new cookie jar from the same network (the same IPv6 /64): waiting, not admitted, not refused.
+    const sibling = ip.includes(':') ? ip.replace(/::[0-9a-f]+$/, '::beef') : ip
+    const again = await join(createClient({ ip: sibling }), room, { inviteToken: invite.token, displayName: 'G again' })
+    expect(again.status, again.text).toBe(202)
+    expect(again.body).toEqual({ status: 'waiting', requestId: expect.any(String) })
+    expect((await requestRow(again.body.requestId))!.status).toBe('waiting')
+    const lobby = await host.api.get(`/api/calls/${room.id}/lobby`)
+    expect(lobby.body.items.map((entry: { requestId: string }) => entry.requestId)).toContain(again.body.requestId)
+    // The moderators decide: an admission works as usual.
+    expect((await host.api.post(`/api/calls/${room.id}/lobby/${again.body.requestId}/admit`)).status).toBe(204)
+    expect((await requestRow(again.body.requestId))!.status).toBe('admitted')
+
+    // Other networks still join directly; the host never waits.
+    expect((await join(createClient({ ip: uniqueIp() }), room, { inviteToken: invite.token, displayName: 'H' })).status).toBe(200)
+    expect((await join(await loginAs(owner, createClient({ ip: sibling })), room)).status).toBe(200)
+  })
+
+  it('sends a removed user who drops the session and comes back as a guest to the lobby', async () => {
+    const owner = await createUser()
+    const room = await createRoom(owner, { waitingRoom: false })
+    const host = await startMeeting(room, owner)
+    const user = await joinUser(room, { expectStatus: 200 })
+    expect((await host.api.post(`/api/calls/${room.id}/participants/${user.identity}/remove`)).status).toBe(204)
+    expectApiError((await joinUser(room, { user: user.user })).res, 403, 'JOIN_REMOVED')
+
+    const asGuest = await joinGuest(room, { api: createClient({ ip: user.api.ip }) })
+    expect(asGuest.res.status, asGuest.res.text).toBe(202)
+    expect(asGuest.res.body.status).toBe('waiting')
+  })
+
+  it('applies to the network of a denied guest too, and only while that meeting lasts', async () => {
+    const owner = await createUser()
+    const room = await createRoom(owner, { waitingRoom: true })
+    const host = await startMeeting(room, owner)
+    const ip = uniqueIp()
+    const denied = await joinGuest(room, { api: createClient({ ip }), expectStatus: 202 })
+    expect((await host.api.post(`/api/calls/${room.id}/lobby/${denied.res.body.requestId}/deny`)).status).toBe(204)
+    expect((await host.api.patch(`/api/calls/${room.id}/settings`, { body: { waitingRoom: false } })).status).toBe(200)
+
+    expect((await joinGuest(room, { api: createClient({ ip }) })).res.status).toBe(202)
+    expect((await joinGuest(room)).res.status).toBe(200)
+
+    // The next meeting starts clean.
+    expect((await host.api.post(`/api/calls/${room.id}/end`)).status).toBe(204)
+    await startMeeting(room, owner)
+    expect((await joinGuest(room, { api: createClient({ ip }) })).res.status).toBe(200)
   })
 })
 

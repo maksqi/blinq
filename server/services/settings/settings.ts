@@ -3,18 +3,23 @@
  *
  * - `getSettings()`: every setting merged over `SETTINGS_DEFAULTS`, cached ≤ 5 s per process, invalidated on write.
  *   Invalid stored values fall back to the default (and are logged).
- * - `updateSettings(patch, actorUserId)`: validates only the keys present in `patch` (strict), re-validates the merged
- *   result and cross-field rules (`registration.mode = 'domain'` needs SMTP and at least one allowed domain), writes
- *   changed keys and returns the new settings. Throws 400 `VALIDATION_FAILED` with `details.issues` (and
- *   `details.field` for cross-field rules). Pass the raw request body: zod 4 fills defaults into
- *   `settingsUpdateSchema.parse()` output, which would reset every key that was not sent (decision). The handler
- *   writes the audit entry (`admin.settings_updated`).
- * - `getSystemFlag(key)` / `setSystemFlag(key, value)`: internal `system.*` keys, never part of `getSettings()`.
+ * - `updateSettings(patch, actorUserId, now)`: validates only the keys present in `patch` with the shared
+ *   `settingsUpdateSchema` (strict; built without defaults, so keys that were not sent stay as they are), re-validates
+ *   the merged result and cross-field rules (`registration.mode = 'domain'` needs SMTP and at least one allowed
+ *   domain), writes changed keys and returns the new settings. Throws 400 `VALIDATION_FAILED` with `details.issues`
+ *   (and `details.field` for cross-field rules). The handler writes the audit entry (`admin.settings_updated`).
+ * - `getSystemFlag(key)` / `setSystemFlag(key, value, db, now)`: internal `system.*` keys, never part of
+ *   `getSettings()`.
  * - `invalidateSettingsCache()`.
  */
 import { eq, like, not } from 'drizzle-orm'
-import { z } from 'zod'
-import { SETTINGS_DEFAULTS, settingsSchema, type SettingKey, type Settings } from '#shared/schemas/settings'
+import {
+  SETTINGS_DEFAULTS,
+  settingsSchema,
+  settingsUpdateSchema,
+  type SettingKey,
+  type Settings,
+} from '#shared/schemas/settings'
 import { useDb, type Db, type Tx } from '../../database/client'
 import { settings as settingsTable } from '../../database/schema'
 import { apiError } from '../../utils/api-error'
@@ -27,11 +32,6 @@ export const SETTINGS_CACHE_TTL_MS = 5_000
 export type SystemFlagKey = `system.${string}`
 
 const SETTING_KEYS = Object.keys(settingsSchema.shape) as SettingKey[]
-
-/** `settingsUpdateSchema` without zod's default filling: only the keys that were sent survive parsing. */
-const patchSchema = z
-  .object(Object.fromEntries(SETTING_KEYS.map((key) => [key, settingsSchema.shape[key].unwrap().optional()])))
-  .strict() as unknown as z.ZodType<Partial<Settings>>
 
 let cached: { value: Settings; at: number } | undefined
 let loading: Promise<Settings> | undefined
@@ -104,7 +104,7 @@ export function applySettingsPatch(
   patch: unknown,
   context: { smtpEnabled: boolean },
 ): { next: Settings; changed: SettingKey[] } {
-  const parsed = patchSchema.safeParse(patch)
+  const parsed = settingsUpdateSchema.safeParse(patch)
   if (!parsed.success) throw apiError('VALIDATION_FAILED', 400, { issues: toValidationIssues(parsed.error) })
   const provided = Object.fromEntries(Object.entries(parsed.data).filter(([, v]) => v !== undefined))
   const merged = settingsSchema.safeParse({ ...current, ...provided })
@@ -120,7 +120,11 @@ export function applySettingsPatch(
   return { next: merged.data, changed }
 }
 
-export async function updateSettings(patch: unknown, actorUserId: string | null): Promise<Settings> {
+export async function updateSettings(
+  patch: unknown,
+  actorUserId: string | null,
+  now: Date = new Date(),
+): Promise<Settings> {
   const db = useDb()
   const next = await db.transaction(async (tx) => {
     const current = await loadSettings(tx)
@@ -128,10 +132,10 @@ export async function updateSettings(patch: unknown, actorUserId: string | null)
     for (const key of result.changed) {
       await tx
         .insert(settingsTable)
-        .values({ key, value: result.next[key], updatedBy: actorUserId, updatedAt: new Date() })
+        .values({ key, value: result.next[key], updatedBy: actorUserId, updatedAt: now })
         .onConflictDoUpdate({
           target: settingsTable.key,
-          set: { value: result.next[key], updatedBy: actorUserId, updatedAt: new Date() },
+          set: { value: result.next[key], updatedBy: actorUserId, updatedAt: now },
         })
     }
     return result.next
@@ -145,9 +149,14 @@ export async function getSystemFlag(key: SystemFlagKey, db: Db | Tx = useDb()): 
   return row?.value
 }
 
-export async function setSystemFlag(key: SystemFlagKey, value: unknown, db: Db | Tx = useDb()): Promise<void> {
+export async function setSystemFlag(
+  key: SystemFlagKey,
+  value: unknown,
+  db: Db | Tx = useDb(),
+  now: Date = new Date(),
+): Promise<void> {
   await db
     .insert(settingsTable)
-    .values({ key, value, updatedAt: new Date() })
-    .onConflictDoUpdate({ target: settingsTable.key, set: { value, updatedAt: new Date() } })
+    .values({ key, value, updatedAt: now })
+    .onConflictDoUpdate({ target: settingsTable.key, set: { value, updatedAt: now } })
 }

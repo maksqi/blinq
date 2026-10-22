@@ -1,7 +1,8 @@
 /**
  * `user.revoked` (rooms-backend, docs/SECURITY.md §4): a user who was disabled, deleted or lost every session is taken
  * out of live calls. Their connected identities are removed from LiveKit with their tokens revoked, their rows become
- * `left` (not final: after signing in again they may rejoin), and their pending requests are closed (`ended`).
+ * `left` (not final: after signing in again they may rejoin through the API) without a `joinedAt`, so the webhook
+ * never takes them back as a reconnect, and their pending requests are closed (`ended`).
  */
 import { and, eq, inArray } from 'drizzle-orm'
 import { useDb } from '../../database/client'
@@ -19,9 +20,10 @@ export async function removeUserFromLiveCalls(userId: string, now: Date = new Da
     .from(callParticipants)
     .where(and(eq(callParticipants.userId, userId), inArray(callParticipants.status, ['waiting', 'admitted', 'joined'])))
   if (rows.length === 0) return 0
+  // `joinedAt: null`: a revoked row is never taken back as a LiveKit reconnect (meetings/enforcement.ts).
   const closed = await db
     .update(callParticipants)
-    .set({ status: 'left', leftAt: now })
+    .set({ status: 'left', leftAt: now, joinedAt: null })
     .where(
       and(
         inArray(

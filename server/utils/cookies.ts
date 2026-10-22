@@ -48,8 +48,14 @@ export function readSessionToken(event: H3Event): string | null {
   return isOpaqueToken(value) ? value : null
 }
 
-export function setGuestCookie(event: H3Event, slug: string, token: string, options: { expiresAt: Date }): void {
-  const maxAge = Math.max(0, Math.floor((options.expiresAt.getTime() - Date.now()) / 1000))
+export function setGuestCookie(
+  event: H3Event,
+  slug: string,
+  token: string,
+  options: { expiresAt: Date; now?: Date },
+): void {
+  const now = options.now ?? new Date()
+  const maxAge = Math.max(0, Math.floor((options.expiresAt.getTime() - now.getTime()) / 1000))
   setCookie(event, guestCookieName(slug), token, { ...cookieAttributes(), maxAge })
 }
 

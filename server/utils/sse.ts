@@ -12,6 +12,7 @@
  * - A `: ping` comment every 15 s keeps proxies from closing idle streams.
  * - `close()` ends the response; `onClose(cb)` runs once on close or client disconnect.
  * - `closeAllSseStreams()` ends every open stream (graceful shutdown).
+ * - `createSseStreamGroups()` counts open streams per key, for caps (waiting-room streams per request and per IP).
  * (decision) h3's `createEventStream` cannot write comment lines, so this is a minimal equivalent on `sendStream`.
  */
 import { sendStream, setResponseHeaders, setResponseStatus, type H3Event } from 'h3'
@@ -122,4 +123,40 @@ export function closeAllSseStreams(): void {
 
 export function openSseStreamCount(): number {
   return openStreams.size
+}
+
+/**
+ * Open streams grouped by a key (a request id, a client network), for per-key caps (F-019). A stream leaves its
+ * group when it closes, so nothing leaks after disconnects.
+ */
+export interface SseStreamGroups {
+  count(key: string): number
+  /** The oldest open stream of the group. */
+  oldest(key: string): SseStream | undefined
+  add(key: string, stream: SseStream): void
+  readonly size: number
+}
+
+export function createSseStreamGroups(): SseStreamGroups {
+  const groups = new Map<string, SseStream[]>()
+  return {
+    count: (key) => groups.get(key)?.length ?? 0,
+    oldest: (key) => groups.get(key)?.[0],
+    add(key, stream) {
+      if (stream.closed) return
+      const list = groups.get(key) ?? []
+      list.push(stream)
+      groups.set(key, list)
+      stream.onClose(() => {
+        const current = groups.get(key)
+        if (!current) return
+        const index = current.indexOf(stream)
+        if (index !== -1) current.splice(index, 1)
+        if (current.length === 0) groups.delete(key)
+      })
+    },
+    get size() {
+      return groups.size
+    },
+  }
 }

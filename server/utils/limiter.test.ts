@@ -5,15 +5,19 @@ import { describe, expect, it } from 'vitest'
 import {
   backoffDelayMs,
   consumeOr429,
+  createConcurrencyLimit,
   createLimiter,
   emailThrottleKey,
   getLimiter,
-  loginThrottleKeys,
+  LOGIN_FAILURE_WINDOW_MS,
+  loginAttemptKeys,
   nextFailureCount,
+  planAttempt,
+  planRefund,
   RATE_LIMITS,
   retryAfterSeconds,
   roomPasswordThrottleKey,
-  throttleDecision,
+  type ThrottleRow,
 } from './limiter'
 
 function clock(start = 1_000_000) {
@@ -141,16 +145,87 @@ describe('backoff', () => {
     expect(backoffDelayMs(1_000)).toBe(900_000)
   })
 
-  it('decides over all keys of an attempt', () => {
+  it('decides over all keys of an attempt: the longest running wait wins', () => {
     const now = new Date('2026-01-01T00:00:00Z')
-    expect(throttleDecision([], now)).toEqual({ allowed: true, retryAfterMs: 0 })
-    expect(throttleDecision([{ nextAllowedAt: null }, { nextAllowedAt: new Date(now.getTime() - 1) }], now)).toEqual({
-      allowed: true,
-      retryAfterMs: 0,
+    const row = (key: string, waitMs: number | null, failures = 6): ThrottleRow => ({
+      key,
+      failures,
+      nextAllowedAt: waitMs === null ? null : new Date(now.getTime() + waitMs),
+      updatedAt: now,
     })
-    expect(
-      throttleDecision([{ nextAllowedAt: new Date(now.getTime() + 2_000) }, { nextAllowedAt: new Date(now.getTime() + 8_000) }], now),
-    ).toEqual({ allowed: false, retryAfterMs: 8_000 })
+    expect(planAttempt([], [], now)).toEqual({ allowed: true, reservation: { keys: [] } })
+    expect(planAttempt([{ key: 'a' }, { key: 'b' }], [row('a', null), row('b', -1)], now).allowed).toBe(true)
+    expect(planAttempt([{ key: 'a' }, { key: 'b' }], [row('a', 2_000), row('b', 8_000)], now)).toEqual({
+      allowed: false,
+      retryAfterMs: 8_000,
+    })
+  })
+
+  it('reserves an allowed attempt as one more failure on every key, with the wait it starts', () => {
+    const now = new Date('2026-01-01T00:00:00Z')
+    const earlier = new Date(now.getTime() - 60_000)
+    const plan = planAttempt(
+      [{ key: 'a' }, { key: 'b' }],
+      [{ key: 'a', failures: 5, nextAllowedAt: null, updatedAt: earlier }],
+      now,
+    )
+    expect(plan).toEqual({
+      allowed: true,
+      reservation: {
+        keys: [
+          {
+            key: 'a',
+            failures: 6,
+            nextAllowedAt: new Date(now.getTime() + 2_000),
+            updatedAt: now,
+            previousNextAllowedAt: null,
+            previousUpdatedAt: earlier,
+          },
+          { key: 'b', failures: 1, nextAllowedAt: null, updatedAt: now, previousNextAllowedAt: null, previousUpdatedAt: null },
+        ],
+      },
+    })
+  })
+
+  it('applies a conditional key only while its guard key has live failures (F-017)', () => {
+    const now = new Date('2026-01-01T00:00:00Z')
+    const keys = [{ key: 'pair' }, { key: 'account', onlyAfterFailuresOf: 'pair' }]
+    const account: ThrottleRow = { key: 'account', failures: 30, nextAllowedAt: new Date(now.getTime() + 600_000), updatedAt: now }
+    const clean = planAttempt(keys, [account], now)
+    expect(clean.allowed).toBe(true)
+    // The bypassed key still counts the failure and keeps (never shortens) its running wait.
+    const reserved = clean.allowed ? clean.reservation.keys.find((entry) => entry.key === 'account') : undefined
+    expect(reserved?.failures).toBe(31)
+    expect(reserved?.nextAllowedAt).toEqual(new Date(now.getTime() + 900_000))
+    const dirty: ThrottleRow = { key: 'pair', failures: 1, nextAllowedAt: null, updatedAt: now }
+    expect(planAttempt(keys, [account, dirty], now)).toEqual({ allowed: false, retryAfterMs: 600_000 })
+    // Guard failures older than 24 h do not count.
+    const stale: ThrottleRow = { ...dirty, updatedAt: new Date(now.getTime() - LOGIN_FAILURE_WINDOW_MS - 1) }
+    expect(planAttempt(keys, [account, stale], now).allowed).toBe(true)
+    // Listed both ways, a key is unconditional.
+    expect(planAttempt([...keys, { key: 'account' }], [account], now).allowed).toBe(false)
+  })
+
+  it('refunds one reserved attempt and undoes its wait unless a later attempt replaced it', () => {
+    const now = new Date('2026-01-01T00:00:00Z')
+    const earlier = new Date(now.getTime() - 60_000)
+    const reserved = {
+      key: 'a',
+      failures: 6,
+      nextAllowedAt: new Date(now.getTime() + 2_000),
+      updatedAt: now,
+      previousNextAllowedAt: null,
+      previousUpdatedAt: earlier,
+    }
+    expect(planRefund({ failures: 6, nextAllowedAt: reserved.nextAllowedAt, updatedAt: now }, reserved)).toEqual({
+      failures: 5,
+      nextAllowedAt: null,
+      updatedAt: earlier,
+    })
+    const later = new Date(now.getTime() + 500)
+    const replaced = { failures: 7, nextAllowedAt: new Date(now.getTime() + 4_500), updatedAt: later }
+    expect(planRefund(replaced, reserved)).toEqual({ failures: 6, nextAllowedAt: replaced.nextAllowedAt, updatedAt: later })
+    expect(planRefund({ failures: 0, nextAllowedAt: null, updatedAt: now }, reserved).failures).toBe(0)
   })
 
   it('forgets failures older than 24 hours', () => {
@@ -162,8 +237,28 @@ describe('backoff', () => {
 
   it('builds throttle keys per email and IP (/64 for IPv6)', () => {
     expect(emailThrottleKey('  Admin@Example.TEST ')).toBe('email:admin@example.test')
-    expect(loginThrottleKeys('a@example.test', '203.0.113.9')).toEqual(['email:a@example.test', 'ip:203.0.113.9'])
-    expect(loginThrottleKeys('a@example.test', '2001:db8:5:6::77')).toEqual(['email:a@example.test', 'net:2001:db8:5:6::/64'])
+    expect(loginAttemptKeys('a@example.test', '203.0.113.9').map((spec) => spec.key)).toEqual([
+      'ip:203.0.113.9',
+      'ip:203.0.113.9|email:a@example.test',
+      'email:a@example.test',
+    ])
+    expect(loginAttemptKeys('a@example.test', '2001:db8:5:6::77')[1]).toEqual({ key: 'net:2001:db8:5:6::/64|email:a@example.test' })
     expect(roomPasswordThrottleKey('r1', '203.0.113.9')).toBe('room:r1:ip:203.0.113.9')
+  })
+})
+
+describe('createConcurrencyLimit', () => {
+  it('caps running tasks per key and frees a slot once per release', () => {
+    const limit = createConcurrencyLimit(2)
+    const a = limit.tryAcquire('k')
+    const b = limit.tryAcquire('k')
+    expect(a && b).toBeTruthy()
+    expect(limit.tryAcquire('k')).toBeNull()
+    expect(limit.tryAcquire('other')).not.toBeNull()
+    a!()
+    a!() // idempotent
+    expect(limit.active('k')).toBe(1)
+    expect(limit.tryAcquire('k')).not.toBeNull()
+    expect(() => createConcurrencyLimit(0)).toThrow(RangeError)
   })
 })

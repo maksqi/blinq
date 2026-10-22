@@ -12,20 +12,23 @@
  * - `closeStaleWaiting(now, roomId?)`: requests older than `WAITING_TTL_MS` (1 h) are closed.
  * - `loadOwnedRequest(event, requestId)`: the request row when the caller owns it (the same user, or the guest
  *   session behind the room's guest cookie), else 403 `FORBIDDEN`; unknown ids are 404 `NOT_FOUND`.
- * - `cancelRequest(event, requestId, now)`, `streamWaitingEvents(event, requestId)`.
+ * - `cancelRequest(event, requestId, now)`, `streamWaitingEvents(event, requestId)` (at most 2 open streams per
+ *   request, the oldest is closed; at most 50 per network, then 429 `RATE_LIMITED`).
  */
-import { and, asc, count, eq, inArray, isNull, lt, or, type SQL } from 'drizzle-orm'
+import { and, asc, count, eq, gte, inArray, isNull, lt, or, type SQL } from 'drizzle-orm'
 import type { H3Event } from 'h3'
-import type { JoinGrant } from '#shared/schemas/join'
+import type { WaitingEvent } from '#shared/schemas/join'
 import type { LobbyEntry } from '#shared/schemas/calls'
 import { useDb, type Db, type Tx } from '../../database/client'
 import { callParticipants } from '../../database/schema'
 import { apiError } from '../../utils/api-error'
 import { getAuth } from '../../utils/auth'
+import { getClientIp, limiterKeysForIp } from '../../utils/client-ip'
 import { readGuestToken } from '../../utils/cookies'
 import { eventBus, subscribeTo } from '../../utils/event-bus'
+import { throwRateLimited } from '../../utils/limiter'
 import { logger } from '../../utils/logger'
-import { createSseStream } from '../../utils/sse'
+import { createSseStream, createSseStreamGroups } from '../../utils/sse'
 import { findGuestSession } from '../session/callers'
 import { getSettings } from '../settings/settings'
 import { kindOf } from '../calls/live'
@@ -80,12 +83,13 @@ export async function closeStaleWaiting(now: Date = new Date(), roomId?: string)
   return closed.length
 }
 
+/** Read-only (F-046): stale requests are left out here and closed by the rooms maintenance or the next decision. */
 export async function listLobby(roomId: string, meetingId: string, now: Date = new Date()): Promise<LobbyEntry[]> {
-  await closeStaleWaiting(now, roomId)
+  const cutoff = new Date(now.getTime() - WAITING_TTL_MS)
   const rows = await useDb()
     .select()
     .from(callParticipants)
-    .where(waitingFor(roomId, meetingId))
+    .where(and(waitingFor(roomId, meetingId), gte(callParticipants.requestedAt, cutoff)))
     .orderBy(asc(callParticipants.requestedAt), asc(callParticipants.id))
   return rows.map((row) => ({
     requestId: row.id,
@@ -217,13 +221,7 @@ export async function cancelRequest(event: H3Event, requestId: string, now: Date
   await notifyLobbyChanged(row.roomId, row.meetingId)
 }
 
-type StreamEvent =
-  | { event: 'status'; data: { status: 'waiting' } }
-  | { event: 'admitted'; data: Omit<JoinGrant, 'status'> }
-  | { event: 'denied'; data: { reason: 'denied' | 'removed' | 'locked' } }
-  | { event: 'ended'; data: Record<string, never> }
-
-export async function currentWaitingEvent(requestId: string): Promise<StreamEvent> {
+export async function currentWaitingEvent(requestId: string): Promise<WaitingEvent> {
   const db = useDb()
   const [row] = await db.select().from(callParticipants).where(eq(callParticipants.id, requestId)).limit(1)
   const room = row ? await findRoomById(row.roomId, { includeDeleted: true }) : null
@@ -248,9 +246,27 @@ export async function currentWaitingEvent(requestId: string): Promise<StreamEven
   }
 }
 
+/**
+ * Caps on open waiting-room streams (decision, F-019): a request keeps its 2 newest streams (a reloaded tab replaces
+ * the stream of the old page; the oldest is closed), and one network (IPv4 address or IPv6 /64) holds at most 50,
+ * the size of a full lobby; beyond that 429 `RATE_LIMITED`.
+ */
+export const WAITING_STREAMS_PER_REQUEST = 2
+export const WAITING_STREAMS_PER_NETWORK = 50
+export const WAITING_STREAMS_RETRY_AFTER_MS = 10_000
+const streamsByRequest = createSseStreamGroups()
+const streamsByNetwork = createSseStreamGroups()
+
 export async function streamWaitingEvents(event: H3Event, requestId: string): Promise<void> {
   const row = await loadOwnedRequest(event, requestId)
+  while (streamsByRequest.count(row.id) >= WAITING_STREAMS_PER_REQUEST) streamsByRequest.oldest(row.id)!.close()
+  const network = limiterKeysForIp(getClientIp(event)).net
+  if (streamsByNetwork.count(network) >= WAITING_STREAMS_PER_NETWORK) {
+    throwRateLimited(event, WAITING_STREAMS_RETRY_AFTER_MS)
+  }
   const stream = createSseStream(event)
+  streamsByRequest.add(row.id, stream)
+  streamsByNetwork.add(network, stream)
   let chain: Promise<void> = Promise.resolve()
   const deliver = async () => {
     if (stream.closed) return

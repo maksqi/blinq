@@ -1,91 +1,124 @@
 /**
  * Login backoff (auth, docs/API.md §1.2 limiter `login`) over the `login_throttle` table.
  *
- * Keys per attempt: `email:<address>` and `ip:<v4>` or `net:<v6 /64>` (`loginThrottleKeys`). 5 free failures per key,
- * then `2^(n-5)` s, capped at 900 s; failures older than 24 h no longer count; never a hard lockout (decision on the
- * numbers, server-core `backoffDelayMs`). Unknown emails count exactly like known ones, so 429s reveal nothing.
- * A successful sign-in clears the email key only: an attacker's IP stays slowed down.
+ * Keys per attempt (`loginAttemptKeys`): the network (`ip:<v4>` or `net:<v6 /64>`), the network + account pair and the
+ * account (`email:<address>`). 5 free failures per key, then `2^(n-5)` s, capped at 900 s; failures older than 24 h no
+ * longer count; never a hard lockout (decision on the numbers, server-core `backoffDelayMs`). The account key only
+ * slows networks that already failed for that account, so nobody can lock the owner out from elsewhere (F-017).
+ * Unknown emails count exactly like known ones, so 429s reveal nothing.
+ *
+ * Every attempt is reserved before the password is checked (F-016): it counts as a failure up front, atomically, so
+ * parallel guesses see each other. Then:
+ * - wrong credentials: nothing more (the failure is already counted);
+ * - right credentials: `succeeded(attempt, clear)` forgets the account keys and gives the attempt back on the network
+ *   key (an attacker's network stays slowed down, a successful login never counts against a shared one);
+ * - not decided (hashing busy, unexpected error) or refused after a right password (disabled, unverified):
+ *   `release(attempt)` gives it back everywhere.
  *
  * - `createLoginThrottle(store)`: the policy over any `ThrottleStore`; `memoryThrottleStore()` for unit tests.
- * - `loginThrottle`: the shared instance over the database store (server-core's `checkLoginAllowed`,
- *   `recordLoginFailure`, `clearLoginFailures`).
+ * - `loginThrottle`: the shared instance over the database store (server-core's `reserveAttempt`, `refundAttempt`,
+ *   `clearLoginFailures`).
  */
 import type { H3Event } from 'h3'
 import {
   backoffDelayMs,
-  checkLoginAllowed,
   clearLoginFailures,
   emailThrottleKey,
-  loginThrottleKeys,
-  nextFailureCount,
-  recordLoginFailure,
-  throttleDecision,
+  loginAttemptKeys,
+  planAttempt,
+  planRefund,
+  refundAttempt,
+  reserveAttempt,
   throwRateLimited,
-  type ThrottleDecision,
+  type AttemptDecision,
+  type AttemptKey,
+  type AttemptReservation,
+  type ThrottleRow,
 } from '../../utils/limiter'
 
-export { backoffDelayMs, emailThrottleKey, loginThrottleKeys }
+export { backoffDelayMs, emailThrottleKey, loginAttemptKeys }
+export type { AttemptKey, AttemptReservation }
 
 export interface ThrottleStore {
-  check(keys: string[], now: Date): Promise<ThrottleDecision>
-  recordFailure(keys: string[], now: Date): Promise<void>
+  /** Without `now`, the store reads the clock once the attempt holds its keys. */
+  reserve(keys: AttemptKey[], now?: Date): Promise<AttemptDecision>
+  refund(reservation: AttemptReservation, keys?: string[]): Promise<void>
   clear(keys: string[]): Promise<void>
 }
 
 export interface LoginThrottle {
-  /** `{ allowed, retryAfterMs }` for an attempt with these keys. */
-  check(keys: string[], now?: Date): Promise<ThrottleDecision>
-  /** Throws 429 `RATE_LIMITED` with `Retry-After` while any key is backing off. */
-  assertAllowed(event: H3Event, keys: string[], now?: Date): Promise<void>
-  recordFailure(keys: string[], now?: Date): Promise<void>
-  /** After a successful sign-in: forget the failures of this email (not of the IP). */
-  recordSuccess(email: string): Promise<void>
+  /** Throws 429 `RATE_LIMITED` with `Retry-After` while a key waits; otherwise counts the attempt as a failure. */
+  reserve(event: H3Event, keys: AttemptKey[], now?: Date): Promise<AttemptReservation>
+  /** The credentials were right: forgets the `clear` keys and gives the attempt back on the others. */
+  succeeded(attempt: AttemptReservation, clear: string[]): Promise<void>
+  /** The attempt was not decided, or was refused after right credentials: gives it back on every key. */
+  release(attempt: AttemptReservation): Promise<void>
   clear(keys: string[]): Promise<void>
 }
 
 export function createLoginThrottle(store: ThrottleStore): LoginThrottle {
   return {
-    check: (keys, now = new Date()) => store.check(keys, now),
-    async assertAllowed(event, keys, now = new Date()) {
-      const decision = await store.check(keys, now)
+    async reserve(event, keys, now) {
+      const decision = await store.reserve(keys, now)
       if (!decision.allowed) throwRateLimited(event, decision.retryAfterMs)
+      return decision.reservation
     },
-    recordFailure: (keys, now = new Date()) => store.recordFailure(keys, now),
-    recordSuccess: (email) => store.clear([emailThrottleKey(email)]),
+    async succeeded(attempt, clear) {
+      await store.clear(clear)
+      const rest = attempt.keys.map((entry) => entry.key).filter((key) => !clear.includes(key))
+      if (rest.length) await store.refund(attempt, rest)
+    },
+    release: (attempt) => store.refund(attempt),
     clear: (keys) => store.clear(keys),
   }
 }
 
 export const databaseThrottleStore: ThrottleStore = {
-  check: (keys, now) => checkLoginAllowed(keys, now),
-  recordFailure: (keys, now) => recordLoginFailure(keys, now),
+  reserve: (keys, now) => reserveAttempt(keys, now),
+  refund: (reservation, keys) => refundAttempt(reservation, keys),
   clear: (keys) => clearLoginFailures(keys),
 }
 
-/** Same rules as the database store, in memory. */
+/**
+ * Same rules as the database store, in memory (each call is atomic: no await between read and write). `peek` decides
+ * without reserving, for assertions.
+ */
 export function memoryThrottleStore(): ThrottleStore & {
-  rows: Map<string, { failures: number; updatedAt: Date; nextAllowedAt: Date | null }>
+  rows: Map<string, ThrottleRow>
+  peek(keys: AttemptKey[], now: Date): AttemptDecision
 } {
-  const rows = new Map<string, { failures: number; updatedAt: Date; nextAllowedAt: Date | null }>()
+  const rows = new Map<string, ThrottleRow>()
+  const plan = (keys: AttemptKey[], now: Date) =>
+    planAttempt(
+      keys,
+      keys.flatMap((spec) => rows.get(spec.key) ?? []),
+      now,
+    )
   return {
     rows,
-    async check(keys, now) {
-      return throttleDecision(
-        [...new Set(keys)].map((key) => ({ nextAllowedAt: rows.get(key)?.nextAllowedAt ?? null })),
-        now,
-      )
+    peek: plan,
+    async reserve(keys, now) {
+      const decision = plan(keys, now ?? new Date())
+      if (decision.allowed) {
+        for (const entry of decision.reservation.keys) {
+          rows.set(entry.key, {
+            key: entry.key,
+            failures: entry.failures,
+            nextAllowedAt: entry.nextAllowedAt,
+            updatedAt: entry.updatedAt,
+          })
+        }
+      }
+      return decision
     },
-    async recordFailure(keys, now) {
-      for (const key of new Set(keys)) {
-        const row = rows.get(key)
-        const failures = nextFailureCount(row, now)
-        const delay = backoffDelayMs(failures)
-        // Like the SQL upsert: a new wait never shortens a longer one that is already running.
-        const nextAllowedAt =
-          delay > 0
-            ? new Date(Math.max(now.getTime() + delay, row?.nextAllowedAt?.getTime() ?? 0))
-            : (row?.nextAllowedAt ?? null)
-        rows.set(key, { failures, updatedAt: now, nextAllowedAt })
+    async refund(reservation, keys) {
+      for (const reserved of reservation.keys) {
+        if (keys && !keys.includes(reserved.key)) continue
+        const row = rows.get(reserved.key)
+        if (!row) continue
+        const next = planRefund(row, reserved)
+        if (next.failures === 0) rows.delete(reserved.key)
+        else rows.set(reserved.key, { key: reserved.key, ...next })
       }
     },
     async clear(keys) {

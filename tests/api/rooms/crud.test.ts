@@ -140,6 +140,22 @@ describe('PATCH and DELETE /api/rooms/:id', () => {
     expectApiError(await (await loginAs(await createUser())).patch(`/api/rooms/${room.id}`, { body: { name: 'x' } }), 404, 'ROOM_NOT_FOUND')
   })
 
+  it('counts new passwords against the room-create limit of the owner (each costs an argon2 hash, F-016)', async () => {
+    const owner = await createUser()
+    const room = await createRoom(owner)
+    const api = await loginAs(owner)
+    for (let i = 0; i < 20; i++) {
+      const res = await api.patch(`/api/rooms/${room.id}`, { body: { password: `secret-${i}` } })
+      expect(res.status, res.text).toBe(200)
+    }
+    const limited = await api.patch(`/api/rooms/${room.id}`, { body: { password: 'one-too-many' } })
+    expectApiError(limited, 429, 'RATE_LIMITED')
+    expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0)
+    // Changes without a new password are not limited; removing the password costs nothing either.
+    expect((await api.patch(`/api/rooms/${room.id}`, { body: { name: 'Still editable' } })).status).toBe(200)
+    expect((await api.patch(`/api/rooms/${room.id}`, { body: { password: null } })).status).toBe(200)
+  })
+
   it('soft-deletes for the owner only and ends a live meeting', async () => {
     const { owner, cohost, room } = await withCohost()
     await startMeeting(room, owner)

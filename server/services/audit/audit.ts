@@ -5,7 +5,8 @@
  *
  * - Actions are `<domain>.<verb>` (lowercase, underscores inside parts), e.g. `auth.login_failed`,
  *   `admin.settings_updated`. Invalid names throw (a programming error that tests catch).
- * - The IP comes from `getClientIp(event)`; pass `null` as the event outside requests (CLI, tasks).
+ * - The IP comes from `getClientIp(event)`; pass `null` as the event outside requests (CLI, tasks), and `{ ip }` for
+ *   work that finishes after the response (the socket may be gone by then).
  * - `actorUserId` defaults to the signed-in user of the request; pass `null` explicitly for "no actor".
  * - `details` are redacted (sensitive keys and token-like strings) and capped at 8 KiB: never pass secrets anyway.
  * - Pass `{ db: tx }` to write inside a transaction.
@@ -62,11 +63,11 @@ export function sanitizeDetails(details: Record<string, unknown> | null | undefi
 export async function audit(
   event: H3Event | null,
   input: AuditInput,
-  options: { db?: Db | Tx; now?: Date } = {},
+  options: { db?: Db | Tx; now?: Date; ip?: string | null } = {},
 ): Promise<void> {
   const actorUserId = event && input.actorUserId === undefined ? ((await getAuth(event)).user?.id ?? null) : null
   const row = buildAuditRow(input, {
-    ip: event ? getClientIp(event) : null,
+    ip: options.ip !== undefined ? options.ip : event ? getClientIp(event) : null,
     actorUserId,
     now: options.now ?? new Date(),
   })

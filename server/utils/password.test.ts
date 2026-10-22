@@ -1,10 +1,14 @@
+import { H3Error } from 'h3'
 import { describe, expect, it } from 'vitest'
 import { COMMON_PASSWORDS } from './common-passwords'
 import {
   ARGON2_PARAMS,
   checkPasswordPolicy,
+  HASHING_CONCURRENCY,
+  HASHING_MAX_WAITING,
   hashPassword,
   isCommonPassword,
+  passwordHashingSaturated,
   passwordNeedsRehash,
   verifyAgainstDummy,
   verifyPassword,
@@ -31,6 +35,26 @@ describe('hashPassword / verifyPassword', () => {
   it('returns false for malformed hashes instead of throwing', async () => {
     expect(await verifyPassword('not-a-hash', 'whatever')).toBe(false)
     expect(await verifyPassword('', 'whatever')).toBe(false)
+  })
+
+  it('refuses work beyond 4 running and 16 waiting hashes with 429 RATE_LIMITED (F-016)', async () => {
+    expect(passwordHashingSaturated()).toBe(false)
+    const pending = Promise.allSettled(
+      Array.from({ length: HASHING_CONCURRENCY + HASHING_MAX_WAITING + 2 }, () => hashPassword('a flood of hashes', fast)),
+    )
+    expect(passwordHashingSaturated()).toBe(true)
+    const results = await pending
+    expect(passwordHashingSaturated()).toBe(false)
+    const refused = results.filter((result) => result.status === 'rejected')
+    expect(refused).toHaveLength(2)
+    for (const result of refused) {
+      const error = (result as PromiseRejectedResult).reason as H3Error
+      expect(error).toBeInstanceOf(H3Error)
+      expect(error.statusCode).toBe(429)
+      expect(error.data).toEqual({ code: 'RATE_LIMITED', details: { retryAfter: 1 } })
+    }
+    // The queue drained: new work runs again.
+    expect(await verifyPassword(await hashPassword('after the flood', fast), 'after the flood')).toBe(true)
   })
 
   it('salts every hash', async () => {

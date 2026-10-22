@@ -1,7 +1,8 @@
 /**
  * Password hashing and policy (server-core, docs/SECURITY.md §4).
  *
- * - `hashPassword(password)`: argon2id (`algorithm: 2`, m=19456 KiB, t=2, p=1), at most 4 concurrent hashes.
+ * - `hashPassword(password)`: argon2id (`algorithm: 2`, m=19456 KiB, t=2, p=1), at most 4 concurrent hashes and 16
+ *   waiting ones; beyond that both functions throw 429 `RATE_LIMITED` (`passwordHashingBusy()`).
  * - `verifyPassword(hash, password)`: parameters come from the PHC string; false for malformed hashes.
  * - `verifyAgainstDummy(password)`: same cost as a real verify, always false. Call it for unknown emails so response
  *   times do not reveal which accounts exist.
@@ -11,9 +12,10 @@
  * - `warmUpPasswordHashing()`: precomputes the dummy hash (called by a server plugin at startup).
  */
 import { hash, parseOptions, verify } from '@node-rs/argon2'
+import { apiError } from './api-error'
 import { COMMON_PASSWORDS } from './common-passwords'
 import { randomToken } from './crypto'
-import { createSemaphore } from './semaphore'
+import { createSemaphore, SemaphoreFullError } from './semaphore'
 
 /** OWASP argon2id profile. `algorithm: 2` = Argon2id (the package's `Algorithm` is a const enum). */
 export const ARGON2_PARAMS = { algorithm: 2, memoryCost: 19456, timeCost: 2, parallelism: 1 } as const
@@ -21,8 +23,34 @@ export const ARGON2_PARAMS = { algorithm: 2, memoryCost: 19456, timeCost: 2, par
 export const PASSWORD_MIN_LENGTH = 12
 export const PASSWORD_MAX_LENGTH = 256
 
-/** Concurrent hashes are capped to keep login floods from exhausting CPU and memory (decision: 4). */
-const hashing = createSemaphore(4)
+/**
+ * Concurrent hashes are capped to keep login floods from exhausting CPU and memory (decision: 4), and so is the queue
+ * behind them (decision: 16, F-016): about 100 ms of waiting at most, then new work is refused at once with 429
+ * `RATE_LIMITED` (`Retry-After: 1`) instead of slowing every sign-in down.
+ */
+export const HASHING_CONCURRENCY = 4
+export const HASHING_MAX_WAITING = 16
+const hashing = createSemaphore(HASHING_CONCURRENCY, { maxWaiting: HASHING_MAX_WAITING })
+
+export const HASHING_BUSY_RETRY_AFTER_SECONDS = 1
+
+export function passwordHashingBusy() {
+  return apiError('RATE_LIMITED', 429, { retryAfter: HASHING_BUSY_RETRY_AFTER_SECONDS })
+}
+
+/** True while the hashing queue is full: callers can refuse at once, before any other work (a login flood). */
+export function passwordHashingSaturated(): boolean {
+  return hashing.waiting >= HASHING_MAX_WAITING
+}
+
+async function withHashingSlot<T>(task: () => Promise<T>): Promise<T> {
+  try {
+    return await hashing.run(task)
+  } catch (error) {
+    if (error instanceof SemaphoreFullError) throw passwordHashingBusy()
+    throw error
+  }
+}
 
 export interface HashPasswordOptions {
   /** Tests only: cheaper argon2 cost. Production code never passes this. */
@@ -31,11 +59,11 @@ export interface HashPasswordOptions {
 
 export async function hashPassword(password: string, options: HashPasswordOptions = {}): Promise<string> {
   const params = options.testParams ? { ...ARGON2_PARAMS, ...options.testParams } : ARGON2_PARAMS
-  return hashing.run(() => hash(password, params))
+  return withHashingSlot(() => hash(password, params))
 }
 
 export async function verifyPassword(hashed: string, password: string): Promise<boolean> {
-  return hashing.run(async () => {
+  return withHashingSlot(async () => {
     try {
       return await verify(hashed, password)
     } catch {

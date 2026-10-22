@@ -4,7 +4,7 @@
  */
 import { TokenVerifier } from 'livekit-server-sdk'
 import { describe, expect, it } from 'vitest'
-import { createClient, createRoom, createUser, expectApiError, loginAs, serverEnv } from '../_harness'
+import { createClient, createParticipant, createRoom, createUser, expectApiError, loginAs, serverEnv } from '../_harness'
 import { joinGuest, joinUser, requestRow, startMeeting } from '../rooms/_support'
 import { openSse } from './_sse'
 
@@ -118,6 +118,60 @@ describe('events', () => {
     expect((await requestRow(second.res.body.requestId))!.status).toBe('left')
     expect((await host.api.post(`/api/calls/${room.id}/end`)).status).toBe(204)
     expect(await a.nextEvent()).toMatchObject({ event: 'ended' })
+  })
+
+  it('keeps the 2 newest streams of a request and closes the oldest (F-019)', async () => {
+    const { room } = await setup()
+    const guest = await joinGuest(room, { expectStatus: 202 })
+    const requestId = guest.res.body.requestId as string
+    const streams = []
+    for (let i = 0; i < 3; i++) {
+      const opened = await openSse(guest.api, requestId)
+      expect(opened.status).toBe(200)
+      expect(await opened.stream!.nextEvent()).toMatchObject({ event: 'status' })
+      streams.push(opened.stream!)
+    }
+    expect(await streams[0]!.nextEvent()).toMatchObject({ kind: 'closed' })
+    for (const stream of streams.slice(1)) await expect(stream.nextEvent(300)).rejects.toThrow('no SSE message in time')
+    for (const stream of streams) stream.close()
+  })
+
+  it('holds at most 50 waiting-room streams per network, then answers 429 with Retry-After (F-019)', async () => {
+    const owner = await createUser()
+    const room = await createRoom(owner, { waitingRoom: true })
+    const user = await createUser()
+    const api = await loginAs(user)
+    const requests = await Promise.all(
+      Array.from({ length: 26 }, () => createParticipant({ room, meeting: null, userId: user.id, status: 'waiting' })),
+    )
+    const streams = []
+    try {
+      for (const request of requests.slice(0, 25)) {
+        for (let i = 0; i < 2; i++) {
+          const opened = await openSse(api, request.id)
+          expect(opened.status).toBe(200)
+          streams.push(opened.stream!)
+        }
+      }
+      const refused = await openSse(api, requests[25]!.id)
+      expect(refused.status).toBe(429)
+      expect(refused.body).toMatchObject({ statusCode: 429, data: { code: 'RATE_LIMITED' } })
+      // Another network is not affected.
+      const elsewhere = await openSse(await loginAs(user), requests[25]!.id)
+      expect(elsewhere.status).toBe(200)
+      streams.push(elsewhere.stream!)
+      // A closed stream frees its slot.
+      streams.shift()!.close()
+      let reopened = await openSse(api, requests[25]!.id)
+      for (let i = 0; i < 20 && reopened.status === 429; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        reopened = await openSse(api, requests[25]!.id)
+      }
+      expect(reopened.status).toBe(200)
+      streams.push(reopened.stream!)
+    } finally {
+      for (const stream of streams) stream.close()
+    }
   })
 
   it('sends a ping comment every 15 s', { timeout: 25_000 }, async () => {
