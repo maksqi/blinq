@@ -76,10 +76,12 @@ describe('livekit-client sets up the receiver before app listeners run', () => {
     const track = { kind: 'video', mediaStreamID: 'stream-1', receiver }
     const seen: boolean[] = []
     room.on(RoomEvent.TrackSubscribed, (subscribed) => {
-      seen.push(hasE2EEReceiver(subscribed as unknown as { receiver: object }))
-      seen.push(acceptReceiver(subscribed as unknown as { receiver: object }))
+      seen.push(hasE2EEReceiver(subscribed))
+      seen.push(acceptReceiver(subscribed))
     })
-    room.emit(RoomEvent.TrackSubscribed, track, { trackInfo: { mimeType: 'video/VP8' } }, { identity: 'p_peer' })
+    // Only the fields E2EEManager reads (the event is emitted the way the Room emits it after a subscription).
+    const publication = { trackInfo: { mimeType: 'video/VP8' } }
+    room.emit(RoomEvent.TrackSubscribed, track as never, publication as never, { identity: 'p_peer' } as never)
     room.removeAllListeners()
     return { track, seen }
   }
