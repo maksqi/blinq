@@ -651,8 +651,7 @@ export async function addPeer(
   await guards.watch(context)
   await rooms.useIdentity(context, join)
   const page = await context.newPage()
-  // Not `load`: Firefox can hold it back while a preview <video> has no data yet (F-064); the pre-join is the signal.
-  await page.goto(rooms.harnessPath(room, join.grant!, name) + '&mic=0', { waitUntil: 'domcontentloaded' })
+  await page.goto(rooms.harnessPath(room, join.grant!, name) + '&mic=0')
   await expect(page.getByTestId('prejoin')).toBeVisible({ timeout: 20_000 })
   await page.getByTestId('join-button').click()
   await waitForPhase(page, 'inCall')

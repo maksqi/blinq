@@ -11,7 +11,8 @@
  * Other fixture files extend this `test` so that `mergeTests` keeps a single copy of the guards.
  *
  * Every watched context also waits for hydration after `page.goto()`, `reload()`, `goBack()` and `goForward()`
- * (`waitForHydration`): a click before hydration does nothing, and hydration resets fields filled before it.
+ * (`waitForHydration`): a click before hydration does nothing, and hydration resets fields filled before it. A call
+ * page (`/m/<slug>`, `/dev/call`) opened without an explicit `waitUntil` waits for commit and hydration, never `load`.
  */
 import { closeSync, existsSync, fstatSync, openSync, readSync } from 'node:fs'
 import { join } from 'node:path'
@@ -259,18 +260,30 @@ function installCspListener(binding: string) {
 /** Generous: the test build hydrates in well under a second, even on a busy runner. */
 const HYDRATION_TIMEOUT_MS = 20_000
 const hydrationWaiting = new WeakSet<Page>()
+/** The call pages: the meeting page `/m/<slug>` (any letter case, F-030) and the harness `/dev/call`. */
+const CALL_PAGE_PATH = /^\/(?:m\/|dev\/call(?:$|\/))/i
 
 /**
- * Runs in the page: true when the document has no Nuxt app, or when Nuxt has finished hydrating it. Nuxt turns
- * `isHydrating` off when the root `<Suspense>` resolves, right before `app:suspense:resolve` (`deferHydration` in
- * nuxt/dist/app/nuxt.js), for client-only routes too and after an error during hydration. `__vue_app__` alone is set
- * earlier, before the async page components have hydrated.
+ * Runs in the page: true once the document is parsed and either has no Nuxt app or Nuxt has finished hydrating it.
+ * Nuxt turns `isHydrating` off when the root `<Suspense>` resolves, right before `app:suspense:resolve`
+ * (`deferHydration` in nuxt/dist/app/nuxt.js), for client-only routes too and after an error during hydration.
+ * `__vue_app__` alone is set earlier, before the async page components have hydrated.
  */
 function nuxtSettled(): boolean {
+  if (document.readyState === 'loading') return false
   type NuxtRoot = Element & { __vue_app__?: { $nuxt?: { isHydrating?: boolean } } }
   const root = document.querySelector('#__nuxt') as NuxtRoot | null
   if (!root) return true
   return root.__vue_app__?.$nuxt?.isHydrating === false
+}
+
+/** Whether `url` (absolute, or a path relative to the base URL) opens a call page. */
+export function isCallPageUrl(url: string): boolean {
+  try {
+    return CALL_PAGE_PATH.test(new URL(url, 'http://base.invalid').pathname)
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -290,13 +303,31 @@ export async function waitForHydration(page: Page, timeout = HYDRATION_TIMEOUT_M
   }
 }
 
-type NavigationOptions = { waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit' } | undefined
+type NavigationOptions = { waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit' }
 
-async function hydrateAfter(page: Page, response: Response | null, options: NavigationOptions): Promise<void> {
+/**
+ * Runs a navigation, then waits for hydration. A call page navigated to without an explicit `waitUntil` waits for
+ * `commit` instead of `load`: in a long run Firefox sometimes never reports `load` (F-064) or even `DOMContentLoaded`
+ * for it although the page renders (seen in the Docker runner on `/dev/call` and `/m/<slug>`, never in a fresh
+ * browser). Hydration, then the caller's own signal (the pre-join screen), mark it ready.
+ */
+async function navigateAndHydrate<O extends NavigationOptions>(
+  page: Page,
+  navigate: (options?: O) => Promise<Response | null>,
+  options: O | undefined,
+  callPage: boolean,
+): Promise<Response | null> {
+  if (callPage && options?.waitUntil === undefined) {
+    const response = await navigate({ ...options, waitUntil: 'commit' } as O)
+    await waitForHydration(page)
+    return response
+  }
+  const response = await navigate(options)
   // `commit` asks for the document before any script ran; a non-HTML answer (JSON, a file) has no app.
-  if (options?.waitUntil === 'commit') return
-  if (response && !/^text\/html\b/i.test(response.headers()['content-type'] ?? '')) return
+  if (options?.waitUntil === 'commit') return response
+  if (response && !/^text\/html\b/i.test(response.headers()['content-type'] ?? '')) return response
   await waitForHydration(page)
+  return response
 }
 
 /** Makes `goto`, `reload`, `goBack` and `goForward` of `page` resolve only once the app has hydrated. */
@@ -307,26 +338,10 @@ function hydrateAfterNavigations(page: Page): void {
   const reload = page.reload.bind(page)
   const goBack = page.goBack.bind(page)
   const goForward = page.goForward.bind(page)
-  page.goto = async (url, options) => {
-    const response = await goto(url, options)
-    await hydrateAfter(page, response, options)
-    return response
-  }
-  page.reload = async (options) => {
-    const response = await reload(options)
-    await hydrateAfter(page, response, options)
-    return response
-  }
-  page.goBack = async (options) => {
-    const response = await goBack(options)
-    await hydrateAfter(page, response, options)
-    return response
-  }
-  page.goForward = async (options) => {
-    const response = await goForward(options)
-    await hydrateAfter(page, response, options)
-    return response
-  }
+  page.goto = (url, options) => navigateAndHydrate(page, (o) => goto(url, o), options, isCallPageUrl(url))
+  page.reload = (options) => navigateAndHydrate(page, reload, options, isCallPageUrl(page.url()))
+  page.goBack = (options) => navigateAndHydrate(page, goBack, options, false)
+  page.goForward = (options) => navigateAndHydrate(page, goForward, options, false)
 }
 
 /**
