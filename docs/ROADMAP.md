@@ -199,7 +199,7 @@ tracked as F-001 to F-011 in the Stage 10 Findings list):
 - Scheduled meetings and calendar integration (client-side invites only, never server-sent room links)
 - Published container images on GHCR (workflow prepared, not run)
 - macOS WebKit with E2EE in nightly CI: GitHub's macOS runners have no Docker, so Postgres, LiveKit and Caddy would
-  need a native harness (today: `E2E_NIGHTLY_BROWSERS=1 sh scripts/e2e.sh --project=webkit` on a Mac with Docker)
+  need a native harness (today: the manual matrix, `docs/TESTING.md` §9)
 
 ## Change log
 

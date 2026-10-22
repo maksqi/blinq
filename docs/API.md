@@ -492,4 +492,7 @@ Parsed once by `server/utils/env.ts`; errors name the variable and placeholder s
 - SMTP (optional): `SMTP_HOST`, `SMTP_PORT=587`, `SMTP_SECURE=false`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`
 - Recording: `RECORDINGS_DIR=/data/recordings`, `RECORDING_WORK_DIR=/work`, `RECORDING_WORK_TMPFS_SIZE=4g`,
   `FFMPEG_PATH`, `FFPROBE_PATH`, `FFMPEG_THREADS=2`, `FFMPEG_TIMEOUT_MINUTES=120`
-- Dev and test: `DEV_PG_PORT=55432`, `BLINQ_TEST_HOOKS` (build time only)
+- LiveKit limits (read only by `docker-compose.yml`, which turns them into LiveKit's `limit.*`): `LIVEKIT_MAX_TRACKS=1600`,
+  `LIVEKIT_MAX_BYTES_PER_SEC=62500000`
+- Dev and test: `DEV_PG_PORT=55432`, `BLINQ_TEST_HOOKS` (build time only), `ALLOW_PUBLIC_BIND` (test setups only),
+  `RECORDING_ALLOW_DISK_WORKDIR` (dev and test)

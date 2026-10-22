@@ -251,10 +251,11 @@ Local-only mode records the same way but saves the file on the recorder's device
 - **App logs:** consola, human-readable by default, `LOG_FORMAT=json` for log shippers.
   - Every request logs method, route, status, duration and request id. Secrets and tokens are redacted.
   - At startup it prints a one-line summary: version, public URL, TURN/SMTP status, registration mode.
-- **Caddy:** JSON access logs with the `access_token` query parameter redacted.
+- **Caddy:** JSON access logs; page URLs keep no query, and credential parameters on `/api` and `/rtc` are redacted
+  (SECURITY.md §7).
 - **LiveKit:** logs at `info`.
 - **Health:**
-  - `GET /api/health` (liveness) and `GET /api/ready` (database + LiveKit reachable).
+  - `GET /api/health` (liveness) and `GET /api/ready` (database and migrations; LiveKit is reported, not gating).
   - Each container has a Docker healthcheck. Docker logs rotate (json-file, size-limited).
 
 ## 10. Scaling and limits

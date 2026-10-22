@@ -125,18 +125,18 @@ cpus=$(getconf _NPROCESSORS_ONLN 2> /dev/null || nproc 2> /dev/null || echo 0)
 mem_kb=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo 2> /dev/null || echo 0)
 mem_gb=$((${mem_kb:-0} / 1024 / 1024))
 if [ "$cpus" -lt 2 ]; then
-  fail "$cpus CPU: blinq needs at least 2 (sizing estimates: docs/DEPLOYMENT.md §2)"
+  fail "$cpus CPU: blinq needs at least 2 (sizing: docs/DEPLOYMENT.md §2)"
 elif [ "$cpus" -lt 4 ]; then
-  warn "$cpus CPUs: fine for small calls; 4 or more for full 25-person rooms (estimate)"
+  warn "$cpus CPUs: fine for small calls; 4 or more for full 25-person rooms (docs/DEPLOYMENT.md §2)"
 else
   ok "$cpus CPUs"
 fi
 if [ "${mem_kb:-0}" -eq 0 ]; then
   warn "could not read the memory size"
 elif [ "$mem_kb" -lt 1900000 ]; then
-  fail "${mem_gb} GB RAM: blinq needs at least 2 GB (estimate)"
+  fail "${mem_gb} GB RAM: blinq needs at least 2 GB (docs/DEPLOYMENT.md §2)"
 elif [ "$mem_kb" -lt 3800000 ]; then
-  warn "about ${mem_gb} GB RAM: 4 GB or more for full rooms and recordings (estimate)"
+  warn "about ${mem_gb} GB RAM: 4 GB or more for full rooms and recordings (docs/DEPLOYMENT.md §2)"
 else
   ok "about ${mem_gb} GB RAM"
 fi

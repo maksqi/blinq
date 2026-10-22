@@ -1,8 +1,8 @@
 name: nightly
 
 # Slow and strict checks that never gate pull requests (docs/TESTING.md §6.7-6.9). The Edge job is non-blocking. macOS
-# WebKit with E2EE runs on a Mac with Docker (`E2E_NIGHTLY_BROWSERS=1 sh scripts/e2e.sh --project=webkit`): GitHub's
-# macOS runners have no Docker (docs/ROADMAP.md backlog). Actions are pinned by commit SHA.
+# WebKit with E2EE is covered by the manual matrix (docs/TESTING.md §9): GitHub's macOS runners have no Docker
+# (docs/ROADMAP.md backlog). Actions are pinned by commit SHA.
 on:
   schedule:
     - cron: '17 2 * * *'
