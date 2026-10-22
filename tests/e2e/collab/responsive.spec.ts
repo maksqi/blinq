@@ -15,6 +15,11 @@ import {
 // mobile-chromium project through the @responsive tag).
 
 const WIDTHS = [375, 768, 1440]
+/**
+ * Entirely inside the viewport, give or take floating-point rounding: a menu flush with the viewport edge measured a
+ * ratio of 0.9999998 (mobile-chromium in the Docker runner). 0.999 of a 300 px menu is 0.3 px.
+ */
+const FULLY = { ratio: 0.999 }
 
 async function fits(page: Page, what: string) {
   expect(await horizontalOverflow(page), `${what}: horizontal overflow`).toBeLessThanOrEqual(0)
@@ -50,7 +55,7 @@ test.describe('collaboration UI fits', { tag: '@responsive' }, () => {
       } = await collab.meeting({ waitingRoom: true }, { camera: false, page, viewport })
       const ana = await collab.addUser(room, host, { name: 'Ana Lima With A Rather Long Display Name', camera: false })
       await rooms.join(room, { guest: 'Wanda Waiting' }, { inviteToken: await rooms.createInvite(room, hostUser) })
-      await expect(page.getByTestId('control-bar')).toBeInViewport({ ratio: 1 })
+      await expect(page.getByTestId('control-bar')).toBeInViewport(FULLY)
       await fits(page, 'call')
       // Scrolled into view, every control is reachable (none sits on top of another).
       await page.locator('[data-control="host-controls"]').scrollIntoViewIfNeeded()
@@ -60,10 +65,10 @@ test.describe('collaboration UI fits', { tag: '@responsive' }, () => {
       await openPanel(page, 'participants')
       await fits(page, 'people panel')
       await openActions(page, ana.identity)
-      await expect(actionsMenu(page)).toBeInViewport({ ratio: 1 })
+      await expect(actionsMenu(page)).toBeInViewport(FULLY)
       await fits(page, 'moderation menu')
       await actionsMenu(page).locator('[data-action="remove"]').click()
-      await expect(page.getByTestId('remove-dialog')).toBeInViewport({ ratio: 1 })
+      await expect(page.getByTestId('remove-dialog')).toBeInViewport(FULLY)
       await fits(page, 'remove dialog')
       await dismiss(page)
       await closePanel(page, 'participants')
@@ -86,15 +91,15 @@ test.describe('collaboration UI fits', { tag: '@responsive' }, () => {
 
       // Host controls and their dialogs.
       await openHostControls(page)
-      await expect(page.getByTestId('host-controls')).toBeInViewport({ ratio: 1 })
+      await expect(page.getByTestId('host-controls')).toBeInViewport(FULLY)
       await fits(page, 'host controls')
       await page.getByTestId('host-mute-all').click()
-      await expect(page.getByTestId('mute-all-dialog')).toBeInViewport({ ratio: 1 })
+      await expect(page.getByTestId('mute-all-dialog')).toBeInViewport(FULLY)
       await fits(page, 'mute all dialog')
       await dismiss(page)
       await openHostControls(page)
       await page.getByTestId('host-end-meeting').click()
-      await expect(page.getByTestId('end-meeting-dialog')).toBeInViewport({ ratio: 1 })
+      await expect(page.getByTestId('end-meeting-dialog')).toBeInViewport(FULLY)
       await fits(page, 'end meeting dialog')
       await dismiss(page)
 
@@ -102,7 +107,7 @@ test.describe('collaboration UI fits', { tag: '@responsive' }, () => {
       const reactions = page.locator('[data-control="reactions"]')
       await reactions.scrollIntoViewIfNeeded()
       await reactions.click()
-      await expect(page.getByTestId('reactions-menu')).toBeInViewport({ ratio: 1 })
+      await expect(page.getByTestId('reactions-menu')).toBeInViewport(FULLY)
       await fits(page, 'reactions')
       await dismiss(page)
 
@@ -111,7 +116,7 @@ test.describe('collaboration UI fits', { tag: '@responsive' }, () => {
       await ana.page.locator('[data-control="microphone"] button').first().click()
       await openActions(page, ana.identity)
       await actionsMenu(page).locator('[data-action="ask-unmute"]').click()
-      await expect(ana.page.getByTestId('ask-unmute-dialog')).toBeInViewport({ ratio: 1 })
+      await expect(ana.page.getByTestId('ask-unmute-dialog')).toBeInViewport(FULLY)
       await fits(ana.page, 'ask-to-unmute prompt')
     })
   }

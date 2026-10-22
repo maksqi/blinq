@@ -366,7 +366,8 @@ navigate there again to rejoin). The fixture also provides `createRoom()`.
   library messages that `FRAMEWORK_NOISE` in `base.ts` lists by their exact text, each with its cause (a build-manifest
   fetch cancelled by a navigation; Firefox rejecting livekit-client's unhandled `AudioContext.resume()` on unload; a
   VideoFrame dropped by the blur library's teardown; livekit-client's failed retry to play the blur processor's
-  `<video>` in Firefox);
+  `<video>` in Firefox), or a known product defect in `PENDING_FINDINGS` (each names its pending finding; the fix
+  agent deletes the entry);
 - a secret appears in the app log or the e2e Caddy log: any tracked value (room key, join proof, LiveKit token,
   invite/session/guest token, password) or a generic pattern (JWT-shaped `eyJ…`, `#k=`). Logs: `logs/e2e/app.log` and
   `logs/e2e/caddy.log`.
@@ -388,9 +389,11 @@ navigation that the page starts itself (`window.location`), call `waitForHydrati
 without an explicit `waitUntil` waits for `commit`, then for hydration, never for `load` or `DOMContentLoaded`: in a
 long run Firefox sometimes reports neither for a fully rendered call page (F-064; seen in the Docker runner on four
 specs of one run, never in a fresh browser: 0 of 300 navigations). It can even lose the commit of a fresh context's
-first navigation (the Cross-Origin-Opener-Policy process switch) while another context is in a call; when the commit
-has not arrived after 15 s but the page shows the target path, the navigation counts as done and the test gets a
-`note` annotation. The caller's own signal, usually the pre-join screen, marks the page ready.
+first navigation (the Cross-Origin-Opener-Policy process switch) while another context is in a call: the page renders,
+but Playwright, and every locator, keeps waiting for that navigation. When the commit has not arrived after 10 s but
+the page shows the target path, `goto` navigates once more to the same URL plus `?e2e-renavigate=1` (a new document of
+the same origin and opener policy, so no process switch) and the test gets a `note` annotation. The caller's own
+signal, usually the pre-join screen, marks the page ready.
 
 `rooms/key-leak.spec.ts` (Stage 04) goes further. It records every request URL and body, WebSocket frame and SSE URL,
 then searches them, a `pg_dump` of the test database and both logs for `K` and everything derived from it.
