@@ -9,10 +9,13 @@
  *
  * scripts/e2e.sh writes the logs to E2E_LOG_DIR (logs/e2e/app.log, logs/e2e/caddy.log) and sets E2E_REQUIRE_LOGS=1.
  * Other fixture files extend this `test` so that `mergeTests` keeps a single copy of the guards.
+ *
+ * Every watched context also waits for hydration after `page.goto()`, `reload()`, `goBack()` and `goForward()`
+ * (`waitForHydration`): a click before hydration does nothing, and hydration resets fields filled before it.
  */
 import { closeSync, existsSync, fstatSync, openSync, readSync } from 'node:fs'
 import { join } from 'node:path'
-import { test as base, expect, type BrowserContext } from '@playwright/test'
+import { test as base, expect, type BrowserContext, type Page, type Response } from '@playwright/test'
 
 export { expect }
 
@@ -40,9 +43,17 @@ export interface ContextRecorder {
   readonly problems: PageProblem[]
 }
 
+export interface WatchOptions {
+  /**
+   * Navigations of the context's pages wait for hydration (`waitForHydration`). Default true; off for contexts with
+   * JavaScript disabled, where nothing ever hydrates.
+   */
+  hydration?: boolean
+}
+
 export interface Guards {
   /** Applies the guards to a context the test creates itself (`browser.newContext()`, a second browser). */
-  watch(context: BrowserContext): Promise<void>
+  watch(context: BrowserContext, options?: WatchOptions): Promise<void>
   /** Allows console errors matching `pattern` (text or script URL) for the rest of the test. Deliberate errors only. */
   allowConsoleError(pattern: string | RegExp): void
 }
@@ -245,6 +256,79 @@ function installCspListener(binding: string) {
   )
 }
 
+/** Generous: the test build hydrates in well under a second, even on a busy runner. */
+const HYDRATION_TIMEOUT_MS = 20_000
+const hydrationWaiting = new WeakSet<Page>()
+
+/**
+ * Runs in the page: true when the document has no Nuxt app, or when Nuxt has finished hydrating it. Nuxt turns
+ * `isHydrating` off when the root `<Suspense>` resolves, right before `app:suspense:resolve` (`deferHydration` in
+ * nuxt/dist/app/nuxt.js), for client-only routes too and after an error during hydration. `__vue_app__` alone is set
+ * earlier, before the async page components have hydrated.
+ */
+function nuxtSettled(): boolean {
+  type NuxtRoot = Element & { __vue_app__?: { $nuxt?: { isHydrating?: boolean } } }
+  const root = document.querySelector('#__nuxt') as NuxtRoot | null
+  if (!root) return true
+  return root.__vue_app__?.$nuxt?.isHydrating === false
+}
+
+/**
+ * Waits until the Nuxt app on `page` has hydrated. Before that a server-rendered button has no handler (a click does
+ * nothing) and mounting `v-model` resets every field filled in so far (F-069, F-070). Pages without a Nuxt app pass at
+ * once. Watched pages wait by themselves after `goto`, `reload`, `goBack` and `goForward`; call this after a full
+ * navigation the page starts itself (`window.location`).
+ */
+export async function waitForHydration(page: Page, timeout = HYDRATION_TIMEOUT_MS): Promise<void> {
+  try {
+    await page.waitForFunction(nuxtSettled, undefined, { polling: 50, timeout })
+  } catch (error) {
+    if (page.isClosed()) return
+    // Without the fragment: it may hold a room key.
+    const where = page.url().split('#')[0]
+    throw new Error(`The Nuxt app on ${where} did not finish hydrating within ${timeout} ms`, { cause: error })
+  }
+}
+
+type NavigationOptions = { waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit' } | undefined
+
+async function hydrateAfter(page: Page, response: Response | null, options: NavigationOptions): Promise<void> {
+  // `commit` asks for the document before any script ran; a non-HTML answer (JSON, a file) has no app.
+  if (options?.waitUntil === 'commit') return
+  if (response && !/^text\/html\b/i.test(response.headers()['content-type'] ?? '')) return
+  await waitForHydration(page)
+}
+
+/** Makes `goto`, `reload`, `goBack` and `goForward` of `page` resolve only once the app has hydrated. */
+function hydrateAfterNavigations(page: Page): void {
+  if (hydrationWaiting.has(page)) return
+  hydrationWaiting.add(page)
+  const goto = page.goto.bind(page)
+  const reload = page.reload.bind(page)
+  const goBack = page.goBack.bind(page)
+  const goForward = page.goForward.bind(page)
+  page.goto = async (url, options) => {
+    const response = await goto(url, options)
+    await hydrateAfter(page, response, options)
+    return response
+  }
+  page.reload = async (options) => {
+    const response = await reload(options)
+    await hydrateAfter(page, response, options)
+    return response
+  }
+  page.goBack = async (options) => {
+    const response = await goBack(options)
+    await hydrateAfter(page, response, options)
+    return response
+  }
+  page.goForward = async (options) => {
+    const response = await goForward(options)
+    await hydrateAfter(page, response, options)
+    return response
+  }
+}
+
 /**
  * Records CSP violations, console errors and uncaught errors of every page in `context`. The fixtures apply it to the
  * test's context automatically; `guards.watch()` applies it to contexts a test creates. Exported for self-tests.
@@ -330,7 +414,7 @@ export const test = base.extend<
   ],
 
   _e2eTest: [
-    async ({ context, allowConsoleErrors, _e2eWorker }, use, testInfo) => {
+    async ({ context, allowConsoleErrors, javaScriptEnabled, _e2eWorker }, use, testInfo) => {
       const allowed = [...allowConsoleErrors, ...FRAMEWORK_NOISE]
       const recorders: ContextRecorder[] = []
       const watched = new WeakSet<BrowserContext>()
@@ -339,9 +423,13 @@ export const test = base.extend<
       const leaks = () => _e2eWorker.logs.leaksSince(start, new Map([..._e2eWorker.env, ...tracked]))
 
       const guards: Guards = {
-        async watch(target) {
+        async watch(target, options = {}) {
           if (watched.has(target)) return
           watched.add(target)
+          if (options.hydration !== false) {
+            target.on('page', hydrateAfterNavigations)
+            target.pages().forEach(hydrateAfterNavigations)
+          }
           recorders.push(await watchContext(target))
         },
         allowConsoleError(pattern) {
@@ -365,7 +453,8 @@ export const test = base.extend<
         },
       }
 
-      await guards.watch(context)
+      // The pre-hydration specs turn JavaScript off (auth/prehydration): their pages never hydrate.
+      await guards.watch(context, { hydration: javaScriptEnabled !== false })
       await use({ guards, secrets })
       await sleep(LOG_SETTLE_MS)
 
