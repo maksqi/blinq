@@ -122,6 +122,8 @@ with `docker compose up`.
 - Unencrypted media is never played, mixed or recorded. A participant who ever announces an unencrypted track stays
   blocked for the rest of the call, and frames that cannot be decrypted are dropped, so a compromised media server
   cannot slip plaintext into a call.
+- A remote track is shown, played, mixed or recorded only once its decrypting receiver is in place, also after a
+  reconnect; a track that does not decrypt is reported instead of failing silently.
 - Keys and other secrets in links (room keys, invite tokens, account and reset tokens) stay in the URL fragment and are
   removed from the address bar on arrival. Forms cannot put credentials or links into the URL, even before the page
   has finished loading.
@@ -176,8 +178,8 @@ with `docker compose up`.
 - **The server sees metadata:** who joins which room and when, display names, participant counts, message sizes and
   timing, and audio levels (for the active-speaker highlight).
 - **A removed participant still knows the key.** They cannot reconnect, and joiners from their network go through the
-  waiting room, but with an invite link from another network they can ask to join again: lock the room or revoke the
-  link. The key can be rotated only between meetings; mid-call key rotation is planned.
+  waiting room, but with an invite link from another network they can join again (straight in when the room has no
+  waiting room): lock the room or revoke the link. The key can be rotated only between meetings; mid-call key rotation is planned.
 - **Server-stored recordings are not end-to-end encrypted:** the server and its admins can decrypt them. Local-only
   recordings are. `RECORDING_ENCRYPTION_KEY` cannot be rotated; losing it makes stored recordings unrecoverable.
 - **One server only.** There is no multi-node mode (LiveKit with Redis, a shared event bus and limiters).
