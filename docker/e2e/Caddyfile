@@ -1,4 +1,5 @@
-# E2E reverse proxy (docs/TESTING.md §6.1, docs/ARCHITECTURE.md §3). scripts/e2e.sh starts and stops it.
+# E2E reverse proxy (docs/TESTING.md §6.1, docs/ARCHITECTURE.md §3). scripts/e2e.sh (host mode, compose.yml) and
+# scripts/e2e-docker.sh (Docker runner, runner.compose.yml) start and stop it.
 #
 # One origin for the app and LiveKit signaling, as in production, so the production CSP (connect-src 'self') applies
 # unchanged. Plain HTTP is enough because http://localhost is a secure context. Caddy sets no security headers (it only
@@ -29,11 +30,12 @@ http://127.0.0.1:2020 {
 }
 
 http://localhost:8080 {
-	# Access log on stdout; scripts/e2e.sh copies it to logs/e2e/caddy.log, where the E2E fixtures scan it for secrets.
+	# The access log ends up in logs/e2e/caddy.log, where the E2E fixtures scan it for secrets. Host mode logs to stdout
+	# and scripts/e2e.sh copies it there; the Docker runner sets E2E_ACCESS_LOG_OUTPUT to write the file directly.
 	# The same two loggers as production (docker/caddy/site.caddyfile explains the names): /api and /rtc redact
 	# credential parameters, every other path loses its whole query.
 	log api {
-		output stdout
+		output {$E2E_ACCESS_LOG_OUTPUT:stdout}
 		format filter {
 			wrap json
 			request>uri query {
@@ -57,7 +59,7 @@ http://localhost:8080 {
 		}
 	}
 	log pages {
-		output stdout
+		output {$E2E_ACCESS_LOG_OUTPUT:stdout}
 		format filter {
 			wrap json
 			request>uri regexp \?.*$ ?REDACTED
