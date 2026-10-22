@@ -141,10 +141,10 @@ low), location, reproduction and owner area.
 ### Findings (orchestrator-maintained)
 Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — status: open | fixed <sha> | accepted
 (<why>)`.
-- [ ] F-001 [low] server — `deleteUser` publishes `user.revoked` after the row is deleted (`call_participants.user_id`
-      already null); the admin service works around it in `beforeDelete` — owner: fix-server — status: open
-- [ ] F-002 [low] server — 404 error responses carry `cache-control: no-cache` (Nitro error handler), not the documented
-      `no-store` — owner: fix-server — status: open
+- [x] F-001 [low] server — `deleteUser` publishes `user.revoked` after the row is deleted (`call_participants.user_id`
+      already null); the admin service works around it in `beforeDelete` — owner: fix-server — status: fixed (fix-server 7a2ff15: live calls are cleared before the row goes; the admin workaround is gone)
+- [x] F-002 [low] server — 404 error responses carry `cache-control: no-cache` (Nitro error handler), not the documented
+      `no-store` — owner: fix-server — status: fixed (fix-server 6f915ea: API errors answer from the error hook with `no-store`; non-API paths keep Nitro's handler, accepted: they are pages, not API responses)
 - [x] F-003 [low] admin — the overview counts live meetings from the first 100 rooms only ("100+") — owner: admin —
       status: accepted (the overview says "100+" beyond 100 rooms; a counts endpoint is a feature, backlog)
 - [x] F-004 [low] ci — nightly.yml runs `--project=msedge`, which `playwright.config.ts` did not define — owner:
@@ -176,16 +176,16 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       overwrites, and the worker passes frames through undecrypted when it is off; blinq checks encryption per track,
       so a compromised SFU can announce one `NONE` track and get plaintext played, mixed and recorded on that
       participant's encrypted tracks (security-review S-01) — owner: fix-call (+ the livekit-client patch) — status: fixed (fix-call e65a485 worker drops undecryptable frames, eebdb98 sticky per-participant block; media/mixed-encryption spec)
-- [ ] F-016 [medium] server — login: the DB backoff races (40 parallel wrong passwords → 40×401, no 429), there is no
+- [x] F-016 [medium] server — login: the DB backoff races (40 parallel wrong passwords → 40×401, no 429), there is no
       `auth-ip` limiter, the argon2 semaphore queue is unbounded (a 200-request flood slows a real login to ~1 s), and
-      `PATCH /api/rooms/:id {password}` re-hashes with no limiter (S-02) — owner: fix-server — status: open
-- [ ] F-017 [medium] server — anyone can soft-lock a known account: the email-only backoff key makes the victim's
-      correct password answer 429 for up to 900 s (S-03, contradicts SECURITY.md §4) — owner: fix-server — status: open
-- [ ] F-018 [medium] server — "removed is final for the meeting" holds per guest session or user only: a removed guest
+      `PATCH /api/rooms/:id {password}` re-hashes with no limiter (S-02) — owner: fix-server — status: fixed (fix-server e9eb34a, 0b335d9: attempts reserved before the check, 8 sign-ins in flight per network, hashing 4 + 16 queued then 429, PATCH passwords count against `room-create`; no separate `auth-ip` on login, accepted: the per-network key and the in-flight cap cover it)
+- [x] F-017 [medium] server — anyone can soft-lock a known account: the email-only backoff key makes the victim's
+      correct password answer 429 for up to 900 s (S-03, contradicts SECURITY.md §4) — owner: fix-server — status: fixed (fix-server e9eb34a: the email key only slows networks that already failed for that account)
+- [x] F-018 [medium] server — "removed is final for the meeting" holds per guest session or user only: a removed guest
       with a fresh cookie and the same multi-use invite is admitted again (S-04) — owner: fix-server (+ fix-call hint)
-      — status: open
-- [ ] F-019 [medium] server — no cap on waiting-room SSE streams per request or IP (150/150 opened) (S-05) — owner:
-      fix-server — status: open
+      — status: fixed (fix-server 3d7351c: the IP or /64 of a removed or denied participant goes through the waiting room for the rest of the meeting; a "same network" flag on lobby entries is backlog)
+- [x] F-019 [medium] server — no cap on waiting-room SSE streams per request or IP (150/150 opened) (S-05) — owner:
+      fix-server — status: fixed (fix-server 48d06f9: 2 streams per request, 50 per network, then 429)
 - [x] F-020 [medium] ui — forms submitted before hydration send `GET /login?email=…&password=…` or `/?link=…#k=…`
       into the URL, history and the Caddy log (S-06) — owner: fix-ui (+ fix-infra: Caddy query redaction) — status: fixed (fix-ui: method="post", no name on the link field, submit disabled until hydration; Caddy part fix-infra)
       (Caddy part fixed by fix-infra 5687e71)
@@ -196,25 +196,25 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       Go module findings (S-09) — owner: fix-infra — status: fixed (fix-infra 8157c68: no npm/npx/corepack in the runtime; xcaddy --replace; trivy HIGH/CRITICAL 7→0 and 6→0)
 - [x] F-023 [low] infra — `postgres:18-alpine` and `node:24-bookworm-slim` are pinned by major version only (S-10) —
       owner: fix-infra (+ orchestrator for workflows) — status: fixed (fix-infra 6857646: node:24.21.0-bookworm-slim, postgres:18.6-alpine3.24 everywhere)
-- [ ] F-024 [low] server — password-reset request timing reveals whether an account exists (7.7 ms vs 1.5 ms) (S-11)
-      — owner: fix-server — status: open
-- [ ] F-025 [low] server — chunked request bodies bypass the 1 MB limit outside Caddy (nuxt-security checks
-      `Content-Length` only) (S-12) — owner: fix-server — status: open
-- [ ] F-026 [low] server — the room-password backoff has the same race as login (25 parallel guesses evaluated) (S-13)
-      — owner: fix-server — status: open
+- [x] F-024 [low] server — password-reset request timing reveals whether an account exists (7.7 ms vs 1.5 ms) (S-11)
+      — owner: fix-server — status: fixed (fix-server 38c8bd2: lookup, token, audit and mail run after the response)
+- [x] F-025 [low] server — chunked request bodies bypass the 1 MB limit outside Caddy (nuxt-security checks
+      `Content-Length` only) (S-12) — owner: fix-server — status: fixed (fix-server 6f915ea, 9a8ceda: declared lengths over 1 MB refused, chunked bodies counted and drained)
+- [x] F-026 [low] server — the room-password backoff has the same race as login (25 parallel guesses evaluated) (S-13)
+      — owner: fix-server — status: fixed (fix-server e9eb34a: room-password attempts reserved before the check)
 - [x] F-027 [low] infra — ffmpeg runs as the app uid and could read the app's `/proc/<pid>/environ` after an ffmpeg
       exploit (S-14) — owner: orchestrator — status: accepted (no capability to switch uid; signed-in input behind the
       ffprobe allowlist; documented in SECURITY.md §6)
-- [ ] F-028 [low] server — `/api/**` responses carry no `Cross-Origin-Resource-Policy` (S-15) — owner: fix-server —
-      status: open
+- [x] F-028 [low] server — `/api/**` responses carry no `Cross-Origin-Resource-Policy` (S-15) — owner: fix-server —
+      status: fixed (fix-server 6f915ea: `cross-origin-resource-policy: same-origin` on `/api/**`)
 - [x] F-029 [low] ui — the key vault survives an expired session (cleared only when a previous user was known; no 401
       hook) (S-16, SECURITY.md §3.1) — owner: fix-ui — status: fixed (fix-ui + `blinq:session-lost` hook in useApi.ts)
 - [x] F-030 [low] ui — `/M/<slug>#k=…` (mixed case) keeps the key in the address bar: the fragment store matches the
       path case-sensitively (S-17) — owner: fix-ui — status: fixed (fix-ui)
 - [x] F-031 [low] call — chat and reaction envelopes can be replayed by the SFU after a reload or 5000 ids (in-memory
       dedupe, no freshness check) (S-18) — owner: fix-call — status: fixed (fix-call dfcc19d: envelopes more than 5 min from the local clock are dropped)
-- [ ] F-032 [low] server — Nitro error bodies reflect `X-Forwarded-Host` in `url` (Caddy overwrites it in production)
-      — owner: fix-server (with F-002) — status: open
+- [x] F-032 [low] server — Nitro error bodies reflect `X-Forwarded-Host` in `url` (Caddy overwrites it in production)
+      — owner: fix-server (with F-002) — status: fixed (fix-server 6f915ea: the error body has no `url`, `message` or stack)
 - [x] F-033 [low] server — a resume within 120 s skips the lock and capacity checks (`resume.ts`) — owner:
       orchestrator — status: accepted (by design: a reconnecting participant keeps the seat it already holds)
 - [x] F-034 [low] call — co-hosts can mute, remove and rename other co-hosts — owner: orchestrator — status: accepted
@@ -229,8 +229,8 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       devtools listeners keep the component and the `CallSession` — owner: fix-call (patches) — status: fixed (fix-call: livekit-client and @tanstack/vue-form patches; ~1.3 MB → 76–125 KB per cycle; hygiene heap spec)
 - [x] F-038 [medium] ui — join error screens keep the preview session (camera, mic, Room, E2EE worker) alive
       (`app/composables/rooms/useJoinFlow.ts:99-107`) — owner: fix-ui — status: fixed (fix-ui)
-- [ ] F-039 [medium] server — a LiveKit full reconnect (left on the old session, joined on the new one) is enforced as
-      a removal (`server/services/meetings/webhooks.ts:62-103`) — owner: fix-server — status: open
+- [x] F-039 [medium] server — a LiveKit full reconnect (left on the old session, joined on the new one) is enforced as
+      a removal (`server/services/meetings/webhooks.ts:62-103`) — owner: fix-server — status: fixed (fix-server 53be5d9: a reconnect within 120 s of the row's own connection is taken back; client follow-up F-067)
 - [x] F-040 [medium] db — `recordings.meeting_id` has no index (deleting a user with 5000 meetings takes 4.5 s vs
       68 ms); `room_invites.created_by`, `user_invites.created_by/used_by` are unindexed FKs; no partial index for the
       stale-waiting sweep or `recordings.started_at` — owner: orchestrator — status: fixed 55a129b (migration 0001_w3_indexes)
@@ -241,27 +241,27 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
 - [x] F-043 [medium] perf — initial JS is over the Stage 10 budget (gzip: `/` 222 KiB, `/login` 225 KiB, `/m/<slug>`
       no-key screen 464 KiB); one 814 KB chunk with livekit-client and all call code loads even on error screens —
       owner: fix-ui (pages, entry) + fix-call (call chunk) — status: fixed (fix-ui + fix-call 0f48008: `/` 144 KiB, `/login` 182 KiB, pre-join 414 KiB gzip; perf/budget asserts it)
-- [ ] F-044 [medium] api — drift: request schemas strip unknown keys (API.md says strict); 503 `SERVICE_UNAVAILABLE`
+- [x] F-044 [medium] api — drift: request schemas strip unknown keys (API.md says strict); 503 `SERVICE_UNAVAILABLE`
       is undocumented and the join screen shows it as unknown; `VALIDATION_FAILED` with status 416; 413/415 normalized
       to `VALIDATION_FAILED`; `recording_busy` documented under upload but thrown by DELETE — owner: orchestrator
-      (docs) + fix-server + fix-ui — status: open
+      (docs) + fix-server + fix-ui — status: fixed (docs 55a129b; error envelope fix-server 6f915ea; join screen fix-ui b7635e6, 503 copy covers a busy server)
 - [x] F-045 [medium] ui — copy: many `ERROR_MESSAGES` give no next step (`shared/utils/error-codes/index.ts`); one
       setting is labeled "Hosts only" in the call and "Hosts and co-hosts" on the room page — owner: fix-ui (+ fix-call
       label) — status: fixed (fix-ui)
-- [ ] F-046 [low] server — LiveKit `createRoom`/`deleteRoom` run inside the room-lock transaction (pool max 10);
+- [x] F-046 [low] server — LiveKit `createRoom`/`deleteRoom` run inside the room-lock transaction (pool max 10);
       `GET /lobby` writes; (unconfirmed) demoting a co-host does not stop their screen share under the "hosts" policy —
-      owner: fix-server — status: open
-- [ ] F-047 [low] server — bare clocks in `settings.ts`, `recordings/processor.ts`, `auth/providers/identity.ts`,
-      `utils/cookies.ts` — owner: fix-server — status: open
+      owner: fix-server — status: fixed (fix-server 986373b: advisory-lock waiters hold no pool connection, a room-lock wait over 15 s answers 503, `GET /lobby` no longer writes, a demoted co-host's screen share is muted under the "hosts" policy; decision: LiveKit `createRoom`/`deleteRoom` stay inside the room lock so a meeting and its room are created and ended together)
+- [x] F-047 [low] server — bare clocks in `settings.ts`, `recordings/processor.ts`, `auth/providers/identity.ts`,
+      `utils/cookies.ts` — owner: fix-server — status: fixed (fix-server 787816b)
 - [x] F-048 [low] server — the dashboard room list (`OR`) and own-recordings list plus count use seq scans at volume
       (5–16 ms at 60k rooms) — owner: orchestrator (indexes, with F-040) — status: accepted (5–16 ms at 60k rooms; `recordings.started_at` indexed in 0001_w3_indexes)
 - [x] F-049 [low] client — a BroadcastChannel can open after dispose (`useJoinFlow.ts:156-162`); `MicChain.destroy`
       does not stop `processedTrack`; recording uploads retry forever after unmount; livekit's iOS `visibilitychange`
       listener is never removed (upstream) — owner: fix-ui + fix-call — status: fixed (fix-ui BroadcastChannel; fix-call MicChain output, upload retries, iOS listener)
-- [ ] F-050 [low] code — dead code (`RECORDING_INVALID_MEDIA`, `notImplemented()`, hint `room.changed`,
+- [x] F-050 [low] code — dead code (`RECORDING_INVALID_MEDIA`, `notImplemented()`, hint `room.changed`,
       `hasModerationMenu`, `bytesEqual`, `queuePosition`, `displayedSetting`) and duplicates (UUID regex ×8,
       `likePattern` ×5, moderator check ×3, server forks of `StreamEvent` and the settings patch schema) — owner:
-      fix-server + fix-call + fix-ui (dead code); duplicates accepted for v1 — status: open
+      fix-server + fix-call + fix-ui (dead code); duplicates accepted for v1 — status: fixed (fix-server dropped the server forks of `StreamEvent` and the settings patch schema, fix-call f8b18e3 the call items, the orchestrator `RECORDING_INVALID_MEDIA`, `notImplemented()`, the `room.changed` hint and `bytesEqual`; the remaining duplicates are accepted for v1)
 - [x] F-051 [low] ui — the 403 and 404 error pages log `[NUXT_E1005]` to the console while hydrating (e2e-security) —
       owner: fix-ui — status: fixed (fix-ui)
 - [x] F-052 [high] ui — axe critical `aria-required-children` on `/settings/sessions`: the session list has
@@ -295,6 +295,18 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
 - [x] F-064 [low] call — Firefox sometimes never fires `load` on a fully rendered pre-join page (a guest in
       `rooms/key-leak` hung for 113 s with no request pending); `openToPrejoin` now waits for `domcontentloaded` — owner:
       fix-call — status: fixed (fix-call 7b04c73: pre-join devices open after `load`; not reproducible on macOS, unconfirmed)
+- [ ] F-065 [medium] infra — under the CDP degradation (5 % loss, 150 ms, 500 kbit/s) a receiver that also publishes is
+      never moved to a lower layer and its picture freezes (median 0 fps); no disconnect, recovery in 3 s. LiveKit's
+      `rtc.congestion_control.use_send_side_bwe: true` kept about 5 fps in a manual probe (e2e-perf) — owner:
+      orchestrator — status: open
+- [x] F-066 [low] infra — Caddy's default zstd level is ~3 % larger than gzip-5 and the `.tflite` model is served
+      uncompressed — owner: orchestrator — status: accepted (the budget is measured with the production encoder; the
+      model is 244 KB of mostly incompressible weights, loaded only when blur is turned on)
+- [ ] F-067 [high] call — after a LiveKit full reconnect (now taken back by F-039) Chromium keeps receiving the peer's
+      packets but decodes no frames (`framesDecoded` 0, no blocked or undecryptable state, no notice); the console shows
+      `Could not unset participant on cryptor` for the peer's tracks. livekit-client 2.22.3 uses `createEncodedStreams`
+      on Chromium (cryptor state per track id); Firefox recovers. `call/reconnect` keeps it as `fixme` for `chromium`
+      only, so nightly `msedge` fails it (fix-server 3ed23b5) — owner: fix-call — status: open
 
 ## Tests
 - API: `tests/api/security/{authz-matrix,idor,csrf,rate-limits,cookies,headers}.test.ts`.
@@ -306,13 +318,6 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
 - Manual (user): Stage 9b and the browser matrix in `docs/TESTING.md`.
 
 ## Definition of Done
-- [ ] F-065 [medium] infra — under the CDP degradation (5 % loss, 150 ms, 500 kbit/s) a receiver that also publishes is
-      never moved to a lower layer and its picture freezes (median 0 fps); no disconnect, recovery in 3 s. LiveKit's
-      `rtc.congestion_control.use_send_side_bwe: true` kept about 5 fps in a manual probe (e2e-perf) — owner:
-      orchestrator — status: open
-- [x] F-066 [low] infra — Caddy's default zstd level is ~3 % larger than gzip-5 and the `.tflite` model is served
-      uncompressed — owner: orchestrator — status: accepted (the budget is measured with the production encoder; the
-      model is 244 KB of mostly incompressible weights, loaded only when blur is turned on)
 - [ ] [agent-manual] Every DoD item of Stages 01–08 and 9a is checked — evidence:
       `awk '/^## Definition of Done/{d=1;next} /^## /{d=0} d && /^- \[ \]/ && !/\[user\]/' docs/stages/0*.md`
       prints nothing (`[user]` items such as 9b are excluded until the user runs them).
