@@ -387,8 +387,10 @@ navigation that the page starts itself (`window.location`), call `waitForHydrati
 **Call pages.** A watched page's `goto` (and `reload`) of a call page (`/dev/call`, `/m/<slug>`, any letter case)
 without an explicit `waitUntil` waits for `commit`, then for hydration, never for `load` or `DOMContentLoaded`: in a
 long run Firefox sometimes reports neither for a fully rendered call page (F-064; seen in the Docker runner on four
-specs of one run, never in a fresh browser: 0 of 300 navigations). The caller's own signal, usually the pre-join
-screen, marks the page ready.
+specs of one run, never in a fresh browser: 0 of 300 navigations). It can even lose the commit of a fresh context's
+first navigation (the Cross-Origin-Opener-Policy process switch) while another context is in a call; when the commit
+has not arrived after 15 s but the page shows the target path, the navigation counts as done and the test gets a
+`note` annotation. The caller's own signal, usually the pre-join screen, marks the page ready.
 
 `rooms/key-leak.spec.ts` (Stage 04) goes further. It records every request URL and body, WebSocket frame and SSE URL,
 then searches them, a `pg_dump` of the test database and both logs for `K` and everything derived from it.
