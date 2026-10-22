@@ -20,7 +20,7 @@ export const JOIN_API_CODES = [
   'LOBBY_FULL',
   'RATE_LIMITED',
   'VALIDATION_FAILED',
-  // 503: the server could not reach LiveKit (server/services/livekit/errors.ts).
+  // 503: the server could not reach LiveKit (server/services/livekit/errors.ts) or is too busy (room lock timeout).
   'SERVICE_UNAVAILABLE',
 ] as const
 
@@ -124,7 +124,7 @@ const COPY: Record<JoinProblemCode, JoinErrorCopy> = {
   },
   SERVICE_UNAVAILABLE: {
     title: "The meeting service isn't available",
-    message: "The server can't reach its media service right now. Try again in a minute.",
+    message: 'The server is busy or its media service is down right now. Try again in a minute.',
     next: 'retry',
   },
   MISSING_KEY: {
