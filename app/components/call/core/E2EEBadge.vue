@@ -47,7 +47,7 @@ const view = computed(() => {
         label: 'Encryption problem',
         tone: 'bg-amber-500/15 text-amber-200 ring-amber-400/30',
         title: "Some media can't be decrypted",
-        text: `${store.undecryptable.map(nameOf).join(', ')} uses a different meeting key. Compare safety codes and ask for a fresh link.`,
+        text: `Media from ${store.undecryptable.map(nameOf).join(', ')} can't be decrypted. Rejoin; if it keeps happening, compare safety codes and ask for a fresh link.`,
       }
     case 'off':
       return {

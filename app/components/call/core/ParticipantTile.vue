@@ -128,14 +128,14 @@ const badges = callRegistry.tileBadges
       data-testid="tile-undecryptable"
     >
       <KeyRoundIcon class="size-6" aria-hidden="true" />
-      <p class="text-xs font-medium sm:text-sm">Can't decrypt: different meeting key</p>
+      <p class="text-xs font-medium sm:text-sm">Can't decrypt this media</p>
     </div>
     <p
       v-if="undecryptable && track"
       class="absolute inset-x-2 top-2 rounded-md bg-amber-950/80 px-2 py-1 text-center text-xs text-amber-100"
       data-testid="tile-undecryptable"
     >
-      Can't decrypt: different meeting key
+      Can't decrypt this media
     </p>
 
     <div class="absolute top-1.5 right-1.5 z-10 flex items-center gap-1">
