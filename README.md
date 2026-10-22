@@ -6,7 +6,8 @@ app and API, a LiveKit SFU with built-in TURN, PostgreSQL, and Caddy for automat
 the meeting link's fragment (`#k=…`), which browsers never send to a server. So neither the media server nor the
 database ever sees your calls or chat in plaintext.
 
-**Status:** Under development — see [docs/ROADMAP.md](docs/ROADMAP.md).
+**Status:** version 1.0.0. What it contains: [CHANGELOG.md](CHANGELOG.md). What comes next: the backlog in
+[docs/ROADMAP.md](docs/ROADMAP.md#backlog-not-in-v1).
 
 ## Features
 
@@ -45,13 +46,24 @@ database ever sees your calls or chat in plaintext.
 - The public ports below, free on the server (no other web server on 80 or 443) and open in the host firewall and in
   any cloud security group.
 - `sh scripts/preflight.sh` checks all of this on the server before the first start.
-- Sizing: these are estimates until they are measured, see [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+- Sizing, from the Stage 10 load tests with 25 encrypted browser clients. They were measured on one fast machine, so
+  the vCPU counts are planning values for a Linux VM until a run on a dedicated VM confirms them (details:
+  [docs/DEPLOYMENT.md §2](docs/DEPLOYMENT.md#sizing), [docs/PERFORMANCE.md §6](docs/PERFORMANCE.md#6-sizing)):
 
-  | Use | vCPU | RAM | Bandwidth |
+  | Use | vCPU | RAM | Bandwidth (symmetric) |
   |---|---|---|---|
-  | Small team | 2 | 4 GB | 100 Mbit/s |
-  | Full 25-person meetings | 4+ | 8 GB | ≥ 500 Mbit/s – 1 Gbit/s |
-  | Recordings | — | — | ≈ 1–1.8 GB of disk per recording hour at 1080p |
+  | Small team: about 10 people in calls at once | 2 | 4 GB | 100 Mbit/s |
+  | One full 25-person meeting with a screen share, plus a few small calls | 4–6 | 8 GB | 250 Mbit/s |
+  | Each further full meeting | + 4 | + 1–2 GB | + 200 Mbit/s |
+
+  - Measured for one full meeting: about 1 GB of SFU RAM and 118–140 Mbit/s of egress (about 56 Mbit/s more with a
+    1080p screen share), which is 53–88 GB of traffic per meeting hour.
+  - Recording adds ffmpeg (`FFMPEG_THREADS`, default 2) and its RAM work area (`RECORDING_WORK_TMPFS_SIZE`, default
+    4g) while a job runs. Plan 1–1.8 GB of disk per recorded hour at 1080p (planning value; only synthetic video has
+    been measured so far).
+  - Match `LIVEKIT_MAX_TRACKS` (default 1600, about 400 per vCPU) and `LIVEKIT_MAX_BYTES_PER_SEC` (default 62500000,
+    your bandwidth in bytes per second) in `.env` to the server: see
+    [docs/DEPLOYMENT.md §2](docs/DEPLOYMENT.md#livekit-limits).
 
 - Optional: an SMTP server for emailed account invites, email verification and password reset. The server never
   emails room links, because they contain the key.
@@ -228,18 +240,41 @@ unset NEW_PASSWORD
   wrong: set `LIVEKIT_NODE_IP` to the server's public IPv4 (the elastic IP behind 1:1 NAT), open 7881/tcp and
   50000–60000/udp (plus 30000–40000/udp behind 1:1 NAT), then `docker compose up -d`.
 - **App unhealthy.** `docker compose logs app postgres livekit`; `/api/ready` names the failing check.
+- **Sign-in says "Too many attempts" (429).** Failed sign-ins slow down the network they come from: after 5 failures
+  the wait doubles with each further failure, up to 15 minutes (`Retry-After` says how long). There is no lockout: the
+  account's owner can always sign in from another network, and a password reset (above) clears the account's wait.
+- **Many people behind one office address get "Too many attempts" when they join.** About 15 joins per minute are
+  allowed per network; the others try again a minute later.
+- **Someone lands in the waiting room although the room has none.** After a removal, joiners from the removed
+  person's network (IPv4 address or IPv6 /64) go through the waiting room for the rest of the meeting. Admit them from
+  the waiting-room panel.
+- **Joining says "The meeting service isn't available" (503).** The app cannot reach LiveKit (`/api/ready` reports
+  `livekit` as `down`; `docker compose logs livekit`), or the server was too busy to take the join within 15 seconds.
 
-More cases (Firefox and TURN, ports in use, old Docker, recordings) are in
+More cases (Firefox and TURN, ports in use, old Docker, recordings, LiveKit limits, 413 responses) are in
 [docs/DEPLOYMENT.md §12](docs/DEPLOYMENT.md#12-troubleshooting).
 
 ## Browser support
 
-TODO(stage-10): fill in from the manual browser matrix in
-[docs/TESTING.md §9](docs/TESTING.md#9-manual-cross-browser-matrix-user).
+Targets: current Chrome, Edge, Firefox and Safari on the desktop, Safari on iOS, and Chrome on Android.
 
-Targets: current Chrome, Edge, Firefox and Safari on the desktop, Safari on iOS, and Chrome on Android. Known limits:
+Tested automatically ([docs/TESTING.md](docs/TESTING.md)):
+- **Chromium and Firefox:** end-to-end encrypted calls between the two on the real meeting flow, plus every other UI
+  flow, in each pull request's E2E run. The production smoke test also runs a Chromium ↔ Firefox call on the
+  production images, directly and relayed through TURN.
+- **WebKit on Linux:** the UI only (sign-in, settings, dashboard and admin pages, accessibility, security headers, and
+  the call page's unsupported-browser screen). Linux WebKit cannot run end-to-end encrypted calls.
+- **Microsoft Edge:** the E2E suite every night (non-blocking).
+- **Safari on macOS with E2EE:** not automated yet (backlog); it is part of the manual check below.
+
+Before a release, the maintainers check the targets on real devices (Chrome, Edge, Firefox, Safari on macOS and iOS,
+Chrome on Android) with the manual matrix in
+[docs/TESTING.md §9](docs/TESTING.md#9-manual-cross-browser-matrix-user), which also records the results.
+
+Known limits:
 - No screen sharing on iOS or Android: those browsers don't offer screen capture to web pages.
 - No speaker (audio output) selection on Safari, iOS or Android. Audio plays on the system output.
+- Safari before 17.2 sends video without simulcast under E2EE, so others always receive its full resolution.
 - A browser without E2EE support gets an explanation screen. blinq never falls back to an unencrypted call.
 
 ## Development
@@ -247,9 +282,8 @@ Targets: current Chrome, Edge, Firefox and Safari on the desktop, Safari on iOS,
 Prerequisites:
 - Node 24 (`.node-version`; ≥ 22.19 also works).
 - pnpm 11.20 (`packageManager` in `package.json`).
-- Docker (Docker Desktop on macOS).
+- Docker (Docker Desktop on macOS). Browser tests run Playwright inside Docker, so no local browsers are needed.
 - ffmpeg 9, for the recording tests.
-- Playwright browsers, installed once with `pnpm exec playwright install chromium firefox webkit`.
 
 ```sh
 cp .env.dev.example .env
@@ -265,17 +299,21 @@ pnpm dev            # applies migrations, then serves http://localhost:3000
   If detection fails (for example on a VPN), set `LIVEKIT_NODE_IP`.
 - The dev Postgres uses port 55432, because a local Postgres often owns 5432.
 
-Checks and tests (details in [docs/TESTING.md](docs/TESTING.md)):
+Checks and tests (details in [docs/TESTING.md](docs/TESTING.md)). Lint, typecheck, unit and API tests run on the host;
+browser tests run in Docker:
 
 ```sh
 pnpm lint && pnpm typecheck
 pnpm test                                  # unit tests
 sh scripts/with-lock.sh pnpm test:api      # API integration tests (builds the test server)
-sh scripts/with-lock.sh pnpm build:test    # test build for E2E (setup: docs/TESTING.md §6.2)
-sh scripts/with-lock.sh pnpm test:e2e      # Playwright
+pnpm test:e2e:docker                       # Playwright in Docker (sh scripts/e2e-docker.sh [playwright args])
 pnpm check:english                         # everything in the repository must be English
 sh scripts/smoke-prod.sh                   # production compose stack with TLS_MODE=internal (docs/DEPLOYMENT.md §15)
 ```
+
+`pnpm test:e2e:docker` passes its arguments to Playwright, for example
+`pnpm test:e2e:docker --project=chromium tests/e2e/call`. On macOS, `sh scripts/e2e.sh` hands over to it. Setup,
+projects and options: [docs/TESTING.md §6](docs/TESTING.md#6-e2e-tests-playwright).
 
 Contributors and AI agents: read [AGENT.md](AGENT.md) before changing anything.
 
@@ -283,6 +321,7 @@ Contributors and AI agents: read [AGENT.md](AGENT.md) before changing anything.
 
 | Document | Contents |
 |---|---|
+| [CHANGELOG.md](CHANGELOG.md) | what each release contains, and its known limitations |
 | [AGENT.md](AGENT.md) | rules for contributors and AI agents, the stack, commands, known gotchas |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | stages, status, dependencies, file ownership |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | components, topology, data model, key flows |
@@ -290,7 +329,7 @@ Contributors and AI agents: read [AGENT.md](AGENT.md) before changing anything.
 | [docs/SECURITY.md](docs/SECURITY.md) | threat model, E2EE design, hardening, vulnerability reports |
 | [docs/TESTING.md](docs/TESTING.md) | test layers, commands, fixtures, CI, the manual browser matrix |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | production deployment in depth: DNS, ports, firewall, TLS modes, install, upgrades, backups, troubleshooting |
-| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | load-test method, results, sizing |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | load-test method, results, sizing, budgets, LiveKit limits |
 | [docs/stages/](docs/stages/) | one file per implementation stage, each with its Definition of Done |
 
 ## Security
@@ -306,7 +345,8 @@ A summary of [docs/SECURITY.md](docs/SECURITY.md):
     the key;
   - there is no per-sender authenticity: any key holder could impersonate another participant;
   - the server sees metadata (who joins when, display names, timing);
-  - a removed participant still knows the key until the host rotates it;
+  - a removed participant still knows the key until the host rotates it, which is possible between meetings (not
+    during one);
   - server-stored recordings are encrypted at rest but readable by the server and admins. Local-only recordings stay
     end-to-end encrypted.
 - **Hardening.** Invite-only accounts, argon2id password hashing, rate limiting with backoff, CSRF protection, a

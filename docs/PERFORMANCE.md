@@ -7,7 +7,8 @@ measurements in §5; README and [`DEPLOYMENT.md`](DEPLOYMENT.md) take their sizi
 ran the SFU, the app, the load generators and the browsers at the same time, with Docker Desktop in between (§4). The
 numbers bound the cost of a room well; they are not a server benchmark. The same runs on a dedicated Linux VM with
 separate load hosts (§2) are a `[user]` item before the numbers are called final. `(decision)` marks a choice this
-document makes where the plan left it open; "estimate" marks a value that is derived, not measured.
+document makes where the plan left it open; "planning value" marks a value that is derived (from a measurement or a
+configured bitrate), not measured itself.
 
 ## 1. Metrics
 
@@ -135,7 +136,7 @@ SWARM_LINK='<invite link>' pnpm exec tsx tests/load/swarm.ts --bots 8 --duration
   of `--bots`, and `--no-observer` on all but one (best: the observer on a machine without bots, or a real client
   instead). Start the hosts a few seconds apart; each host with its own public IP has its own `join-ip` budget. Keep
   every host below 70% CPU (`host.cpuPercent` in the summary). On this hardware a bot costs about half a fast core
-  (§5.2), so plan about 1 vCPU and 1 GB RAM per bot (estimate).
+  (§5.2), so plan about 1 vCPU and 1 GB RAM per bot (planning value).
 - **One machine.** `tests/load/onbox.spec.ts` creates the room and the invite on the E2E stack (test build, e2e Caddy,
   dev LiveKit) and runs the swarm: `SWARM_BOTS=12 SWARM_DURATION=120 E2E_HTTP_PORT=8090 sh scripts/e2e.sh --config
   tests/load/playwright.config.ts` (variables: `SWARM_BOTS`, `SWARM_DURATION`, `SWARM_JOIN_INTERVAL`,
@@ -293,8 +294,8 @@ One full room is 25 video and audio publishers plus 25 subscribers (`--layout 5x
 - The partial file covered 157 s of the 161 s recorded (the last chunk was still on the recorder when its tab closed).
 - Fake cameras compress far better than real ones, so upload rate and stored size here are lower bounds. The recorder
   targets 2.5 Mbit/s video at 1080p plus 128 kbit/s audio, so it uploads at most about 1.2 GB per hour. The server
-  re-encodes with x264 CRF 23 (no bitrate cap), so the stored size depends on the content: keep planning with 1–1.8 GB
-  per hour at 1080p (estimate) until an hour of real cameras is measured (`[user]`, S4).
+  re-encodes with x264 CRF 23 (no bitrate cap), so the stored size depends on the content: plan with 1–1.8 GB per hour
+  at 1080p (planning value) until an hour of real cameras is measured (`[user]`, S4).
 
 ### 5.4 Client CPU by device (S1: 24 remote tiles, E2EE) `[user]`
 
@@ -329,8 +330,9 @@ A headless bot on a fast desktop core needs about half a core for a 25-person gr
 ## 6. Sizing
 
 Derived from §5 (on-box). One full meeting means 25 people with cameras and microphones on, everyone in the 5×5 grid.
+README and [`DEPLOYMENT.md` §2](DEPLOYMENT.md#2-server-requirements) take their sizing from this section.
 
-| Per full 25-person meeting | Measured on the M5 Max | On a Linux VM (estimate) |
+| Per full 25-person meeting | Measured on the M5 Max | Planning value for a Linux VM |
 |---|---|---|
 | SFU CPU | 1.9 cores with browsers (0.65–0.7 with `lk` testers) | about 4 vCPU (a cloud vCPU is one SMT thread of a slower core: assume half an M5 Max performance core) |
 | SFU RAM | about 1 GB with browsers (0.6 GB with 50 `lk` testers) | the same |
@@ -340,58 +342,78 @@ Derived from §5 (on-box). One full meeting means 25 people with cameras and mic
 | Tracks (in + out) | about 1250 | the same |
 
 - Per core: about 13 browser participants in full meetings on an M5 Max core, about 650 tracks (in + out).
-- Per vCPU (estimate): about 6 participants in full meetings, about 300–400 tracks (in + out).
+- Per vCPU (planning value): about 6 participants in full meetings, about 300–400 tracks (in + out).
 - Smaller meetings cost less per person: 13 people took 0.57 cores and 57 Mbit/s of egress.
 - What a Linux VM changes: host networking replaces Docker Desktop's port forwarding (less overhead per packet), the
   generators move to other machines (no contention), and real networks add loss and jitter (more retransmissions and
   keyframes). vCPUs are slower than these cores. Treat the VM column as a planning value until the `[user]` run
   replaces it.
 
-Recommended deployments (replaces the earlier estimates):
+Recommended deployments (planning values derived from the measurements above; they replace the pre-measurement
+figures):
 
 | Deployment | vCPU | RAM | Bandwidth (symmetric) | Load |
 |---|---|---|---|---|
 | Small team | 2 | 4 GB | 100 Mbit/s | about 10 people in calls at once (13 people measured: 0.6 fast cores, 57 Mbit/s) |
 | One full 25-person meeting | 4–6 | 8 GB | 250 Mbit/s | one 25-person meeting with a screen share, plus a few small calls |
 | Each further full meeting | + 4 | + 1–2 GB | + 200 Mbit/s | |
-| Recording | + `FFMPEG_THREADS` (default 2) while a job runs | + `RECORDING_WORK_TMPFS_SIZE` (default 4g) while a job runs | upload ≤ 1.2 GB per recording hour; disk ≈ 1–1.8 GB per hour at 1080p (estimate, §5.3) | |
+| Recording | + `FFMPEG_THREADS` (default 2) while a job runs | + `RECORDING_WORK_TMPFS_SIZE` (default 4g) while a job runs | upload ≤ 1.2 GB per recording hour; disk: plan 1–1.8 GB per hour at 1080p (§5.3) | |
+
+Match the LiveKit limits to the deployment (§8): `LIVEKIT_MAX_TRACKS` about 400 per vCPU, `LIVEKIT_MAX_BYTES_PER_SEC`
+the bandwidth plan in bytes per second.
 
 ## 7. Performance budgets
 
-| Budget | Metric | Value | Measured on `c367c0b` (zstd through Caddy) | Enforced by |
+| Budget | Metric | Value | Measured on `c5835ea` (Chromium, zstd through the e2e Caddy, each file counted once) | Enforced by |
 |---|---|---|---|---|
-| Initial JS | compressed JS to render `/` and `/login` with a cold cache, prefetches not counted | ≤ 200 KB | `/` 237.0 KiB (64 files), `/login` 252.2 KiB (80 files): over, pending F-043 | `perf/budget.spec.ts` |
-| Call route | compressed JS of `/m/<slug>` up to a guest's pre-join screen, without the E2EE worker, MediaPipe and RNNoise | ≤ 450 KB | 497.5 KiB (84 files; the largest chunk, with livekit-client and the call code, is 227.5 KiB): over, pending F-043 | `perf/budget.spec.ts` |
+| Initial JS | compressed JS to render `/` and `/login` with a cold cache, prefetches not counted | ≤ 200 KB | `/` 153.6 KiB (45 files), `/login` 193.8 KiB (48 files): within budget | `perf/budget.spec.ts` |
+| Call route | compressed JS of `/m/<slug>` up to a guest's pre-join screen, without the E2EE worker, MediaPipe and RNNoise | ≤ 450 KB | 438.9 KiB (84 files; the largest, with livekit-client, is 139.7 KiB): within budget. The spec's own sum is 477.9 KiB, see below | `perf/budget.spec.ts` (skips it, see below) |
 | E2EE worker | loaded at pre-join | not budgeted | 30.8 KiB | reported by `perf/budget.spec.ts` |
 | Effects assets | loaded only when a user enables them | not budgeted (decision: self-hosted vendor files) | blur: MediaPipe loader 54 KiB + wasm 2.6 MiB (compressed) + model 244 KiB (served as `application/octet-stream`, so uncompressed); RNNoise: worklet 12 KiB + wasm 115 KiB | build output, gzip/zstd computed |
 | Join time | click → first remote frame | PR gate < 6 s (single run); nightly p95 < 3 s; target p50 < 1.5 s | swarm: p50 280–298 ms, p95 316 ms up to 13 people (712 ms with the overloaded 25-bot host) | e2e.yml, nightly.yml (see [`TESTING.md` §6.7](TESTING.md#67-timing-policy)) |
 | Client CPU | real client in S1 | TBD | `[user]` (§5.4) | manual |
 
-- The budget values are the Stage 10 decisions (200 KB and 450 KB) rather than baseline plus 10%: main is over both
-  (F-043). A page listed as pending F-043 in `budget.spec.ts` is reported and skipped while over its budget and
-  asserted once under it; remove the entries when F-043 is fixed. Raising a budget needs a line in the change log below
-  explaining why.
-- Counting everything the page fetched (prefetches included): `/` 249.5 KiB, `/login` 264.6 KiB, `/m/<slug>` 543 KiB.
-  Counting only what started before the load event: `/` 203.8 KiB, `/login` 228.8 KiB.
+- The budget values are the Stage 10 decisions (200 KB and 450 KB) rather than baseline plus 10%. Raising a budget
+  needs a line in the change log below explaining why.
+- F-043 (over both budgets on `c367c0b`: `/` 237.0 KiB, `/login` 252.2 KiB, `/m/<slug>` 497.5 KiB) is fixed. The
+  landing and sign-in pages load their menus on use, the landing page no longer loads the form library, and links
+  prefetch on hover or focus only (fix-ui). The meeting page loads the call code only when the meeting needs it
+  (fix-ui), and the pre-join screen no longer loads the in-call UI (fix-call `0f48008`). The fix agents measured gzip
+  over the build output: `/` 144 KiB, `/login` 182 KiB, the pre-join 455.9 KiB before and 414.0 KiB after `0f48008`
+  (gzip -9). Caddy's zstd adds about 6% to gzip -9, which matches the measurement in the table.
+- `budget.spec.ts` still lists all three pages as pending F-043: a listed page over its budget is reported and skipped
+  instead of failing. `/` and `/login` are under it, so they are asserted (the spec's sums: 153.6 and 194.1 KiB; one
+  0.2 KiB file of `/login` is listed twice). For the call route the spec sums 100 Resource Timing entries for 84
+  files: 16 files (39.0 KiB) that the page preloads (initiator `link`) are listed again when the module loads them
+  (initiator `script`), so its sum, 477.9 KiB, is over the budget and the check is skipped. Whether the second entry
+  is a second download or a cache hit is not recorded (the spec reads `encodedBodySize`, which a cache hit reports too;
+  `transferSize` would tell). Pending: count each URL once (or use `transferSize`) and drop the pending list, so the
+  call route is asserted.
+- Counting everything the page fetched (prefetches and the E2EE worker included): `/` 206.9 KiB, `/login` 248.4 KiB,
+  `/m/<slug>` 530.7 KiB. Counting only what started before the load event: `/` 153.6 KiB, `/login` 193.8 KiB,
+  `/m/<slug>` 174.5 KiB (the call code loads after it).
 - Caddy's zstd at its default level compresses this JavaScript about 3% worse than gzip at level 5 and about 6% worse
-  than zstd level 6 (computed over the build output). Precompressed assets or a higher zstd level would help a little;
-  splitting the call chunk (F-043) is what makes the budget.
+  than zstd level 6 (computed over the build output). Precompressed assets or a higher zstd level would help a little
+  (F-066, accepted).
 
 ## 8. LiveKit limits
 
-`docker-compose.yml` sets `limit.num_tracks: 2600` and `limit.bytes_per_sec: 62500000` (estimates). When the node is
-over a limit, LiveKit refuses new participants instead of degrading every meeting on it; a value of 0 or less turns
-the limit off (`LimitsReached` in LiveKit's node selector).
+`docker-compose.yml` sets LiveKit's `limit.num_tracks` from `LIVEKIT_MAX_TRACKS` (default 1600) and
+`limit.bytes_per_sec` from `LIVEKIT_MAX_BYTES_PER_SEC` (default 62500000 bytes per second, 500 Mbit/s). Both are
+optional `.env` settings (`.env.example`), so an operator matches them to the server (§6) without editing the compose
+file; `docker compose up -d livekit` applies a change (and interrupts the calls in progress). When the node is over a
+limit, LiveKit refuses new participants instead of degrading every meeting on it; a value of 0 or less turns the limit
+off (`LimitsReached` in LiveKit's node selector).
 
 - `num_tracks` counts tracks in + out. A full 25-person meeting is about 1250 tracks, and browsers cost about 650 tracks
-  per fast core, about 300–400 per vCPU (estimate). The fixed 2600 therefore admits two full meetings, about 8 vCPU of
-  SFU work, whatever the server size, which overloads the 4-vCPU reference server. Recommended: about 400 per vCPU,
-  set per server, with 1600 as the default for the 4-vCPU reference (one full meeting plus a few small calls)
-  (decision).
-- `bytes_per_sec` counts ingress plus egress. A full meeting is about 15–25 MB/s (120–200 Mbit/s); the current
+  per fast core (measured), about 300–400 per vCPU (planning value). Recommended: about 400 per vCPU, set per server
+  (decision): 1600, the default, fits the 4-vCPU reference server (one full meeting plus a few small calls); 800 on
+  2 vCPU, 2400 on 6, 3200 on 8. The earlier fixed 2600 admitted two full meetings, about 8 vCPU of SFU work, whatever
+  the server size, which overloads the 4-vCPU reference.
+- `bytes_per_sec` counts ingress plus egress. A full meeting is about 15–25 MB/s (120–200 Mbit/s); the default
   62500000 (500 Mbit/s) fits two to four full meetings. It follows the server's bandwidth plan rather than its CPU:
-  keep 62500000 for a 500 Mbit/s or faster plan and lower it on smaller plans (about 25 MB/s per full meeting).
-- Both belong in `.env` so an operator can match them to the server (§6) without editing the compose file.
+  keep the default on a plan of 500 Mbit/s or more, and on a smaller plan set the plan in bytes per second (Mbit/s ×
+  125000: 31250000 for 250 Mbit/s, 12500000 for 100 Mbit/s), about 25 MB/s per full meeting.
 
 ## 9. Change log
 
@@ -399,3 +421,8 @@ the limit off (`LimitsReached` in LiveKit's node selector).
 - 2026-10-03: Stage 10 on-box measurements (§4, §5); sizing (§6), budgets (§7) and LiveKit limits (§8) derived from
   them; `lk load-test` pinned to `livekit/livekit-cli:v2.18.8`; swarm (`tests/load/swarm.ts`), degradation, long
   recording and budget specs added. The dedicated-VM run stays a `[user]` item.
+- 2026-10-22: §7 measured again on `c5835ea` after the F-043 fixes (`/` 153.6 KiB, `/login` 193.8 KiB, call route
+  438.9 KiB with each file counted once; the spec double-counts 16 preloaded files and skips the call route, pending a
+  spec fix). §8 describes the `.env` settings `LIVEKIT_MAX_TRACKS` (default 1600) and `LIVEKIT_MAX_BYTES_PER_SEC`
+  (default 62500000) that replaced the fixed 2600 tracks in `c5835ea`, with values per server size. "Estimate" became
+  "planning value" for derived numbers; README and `DEPLOYMENT.md` take their sizing from §6.
