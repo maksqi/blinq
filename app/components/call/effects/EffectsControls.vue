@@ -48,7 +48,9 @@ function onGain(value: number[] | undefined) {
 
 <template>
   <div v-if="effects && state" class="flex flex-col gap-4" data-testid="effects-controls">
-    <Field :class="cn(compact && 'gap-1.5')" :data-disabled="state.blurSupport.ok ? undefined : true">
+    <!-- No data-disabled on the field: the dimmed label would fail contrast (F-071); the disabled toggles dim themselves
+    and the reason below stays readable. -->
+    <Field :class="cn(compact && 'gap-1.5')">
       <FieldLabel :id="`${idPrefix}-blur-label`" :class="labelClass">Background blur</FieldLabel>
       <ToggleGroup
         type="single"

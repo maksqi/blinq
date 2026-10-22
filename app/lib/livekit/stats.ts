@@ -48,6 +48,14 @@ function inboundRtp(stats: RTCStatsReport, kind: 'audio' | 'video'): Report | un
   return found
 }
 
+/** Packets received and frames decoded by one video receiver (the receiver watchdog's sample); null without a report. */
+export async function videoDecodeSample(
+  receiver: Pick<RTCRtpReceiver, 'getStats'>,
+): Promise<{ packetsReceived: number; framesDecoded: number } | null> {
+  const report = inboundRtp(await receiver.getStats(), 'video')
+  return report ? { packetsReceived: num(report.packetsReceived), framesDecoded: num(report.framesDecoded) } : null
+}
+
 export async function collectInboundStats(room: Room): Promise<InboundStats> {
   const result: InboundStats = { video: {}, audio: {} }
   const jobs: Promise<void>[] = []

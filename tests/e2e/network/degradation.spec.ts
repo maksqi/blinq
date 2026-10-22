@@ -56,14 +56,6 @@ const TERMINAL_PHASES = ['left', 'ended', 'removed', 'error']
 /** Median decoded frames per second over the last 30 s of the impairment. */
 const MIN_ADAPTED_FPS = 3
 
-/**
- * pending finding (new, e2e-perf report) — with LiveKit's default congestion control (receiver reports,
- * `use_send_side_bwe: false`) a subscriber that also publishes its camera over the bad link is never moved to a
- * lower layer: the 720p layer keeps overrunning the link and the picture freezes (median 0 fps) until the link
- * recovers. `rtc.congestion_control.use_send_side_bwe: true` kept about 5 fps in a manual check
- * (docs/PERFORMANCE.md §5.5). While this is true, a frozen picture skips the test after every other check passed.
- */
-const PENDING_ADAPTATION = true
 
 interface Sample {
   at: number
@@ -236,11 +228,7 @@ test(
     await receiverContext.close()
     await hostContext.close()
 
-    const adapted = result.degraded.medianFpsLast30s >= MIN_ADAPTED_FPS
-    test.skip(
-      PENDING_ADAPTATION && !adapted,
-      `pending finding: the picture froze under the impairment (median ${result.degraded.medianFpsLast30s} fps, no lower layer)`,
-    )
+    // F-065: the freeze measured on the macOS host (median 0 fps) does not happen in the Docker runner or on Linux.
     expect(result.degraded.medianFpsLast30s, 'the SFU adapts and the video keeps moving').toBeGreaterThanOrEqual(
       MIN_ADAPTED_FPS,
     )

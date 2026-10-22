@@ -12,11 +12,16 @@
  *   track were never removed, so the mic chain's output (kept alive by the shared AudioContext) held every Room.
  * - Engine (F-006): a server-side close (room deleted, participant removed) logged data channel errors when the SCTP
  *   abort arrived before the leave message.
+ * - Engine (F-067): `pendingReconnect` stayed true until the reconnect attempt settled, but a full reconnect emits
+ *   Reconnected about 2 s earlier, and the Room buffered every `emitWhenConnected` event of that window (TrackSubscribed
+ *   included) with nothing left to flush it: the E2EE receiver transform was never set up. Now the flag ends when the
+ *   timer fires, and a cancelled timer leaves no pending reconnect.
  */
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { ConnectionState, Room, RoomEvent, setLogLevel } from 'livekit-client'
+import { afterEach, describe, expect, it } from 'vitest'
 
 const require = createRequire(import.meta.url)
 // The CommonJS entry (dist/livekit-client.umd.js) sits next to the ES module builds the browser bundles.
@@ -103,5 +108,127 @@ describe('livekit-client patch', () => {
     const up = blockAfter(bundle, 'function blinqSessionUp(engine) {')
     expect(up).toContain('engine._isClosed')
     expect(up).toContain('engine.attemptingReconnect')
+  })
+
+  it('ends pendingReconnect when the reconnect timer fires, not when the attempt settles (F-067)', () => {
+    const onDisconnect = blockAfter(bundle, 'this.handleDisconnect = (connection, disconnectReason) =>')
+    expect(onDisconnect).toContain('blinq patch (F-067)')
+    expect(onDisconnect).toContain('if (this.reconnectTimeout === reconnectTimeout) {')
+    expect(bundle).not.toContain('.finally(() => this.reconnectTimeout = undefined)')
+    const clear = blockAfter(bundle, '  clearReconnectTimeout() {')
+    expect(clear).toContain('this.reconnectTimeout = undefined;')
+  })
+
+  it('keeps the receiver flag and the TrackSubscribed listener blinq relies on (receiver-guard.ts)', () => {
+    // receiver-guard.ts reads this property; E2EEManager sets it once the receiver's transform is in place.
+    expect(bundle).toContain("const E2EE_FLAG = 'lk_e2ee';")
+    expect(
+      blockAfter(bundle, '  handleReceiver(receiver, trackId, participantIdentity, codec, hasPacketTrailer) {'),
+    ).toContain('receiver[E2EE_FLAG] = true;')
+    const listeners = blockAfter(bundle, '  setupEventListeners(room, keyProvider) {')
+    expect(listeners).toContain('.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {')
+    expect(listeners).toContain('this.setupE2EEReceiver(track, participant.identity, pub.trackInfo);')
+  })
+})
+
+/** The engine internals the F-067 tests drive (all exist on RTCEngine in 2.22.3). */
+interface EngineInternals {
+  readonly pendingReconnect: boolean
+  /** True until the engine joined (handleDisconnect ignores a closed engine). */
+  _isClosed: boolean
+  attemptReconnect: (reason?: unknown) => Promise<void>
+  handleDisconnect: (connection: string, reason?: unknown) => void
+  clearReconnectTimeout: () => void
+  clearPendingReconnect: () => void
+}
+
+/** The Room internals the F-067 tests drive. */
+interface RoomInternals {
+  state: ConnectionState
+  bufferedEvents: unknown[]
+  emitWhenConnected: (event: RoomEvent, ...args: unknown[]) => boolean
+}
+
+describe('livekit-client patch: reconnect window (F-067)', () => {
+  const rooms: Room[] = []
+  setLogLevel('silent')
+
+  /** A Room that believes it is connected, whose engine's reconnect attempts never settle (a restart in progress). */
+  function connectedRoom() {
+    const room = new Room()
+    rooms.push(room)
+    const engine = room.engine as unknown as EngineInternals
+    engine._isClosed = false
+    const attempts: unknown[] = []
+    engine.attemptReconnect = (reason) => {
+      attempts.push(reason)
+      return new Promise<void>(() => undefined)
+    }
+    const internals = room as unknown as RoomInternals
+    internals.state = ConnectionState.Connected
+    return { room, engine, internals, attempts }
+  }
+
+  const macrotask = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+  afterEach(() => {
+    for (const room of rooms.splice(0)) {
+      const engine = room.engine as unknown as EngineInternals
+      engine.clearPendingReconnect()
+      room.removeAllListeners()
+    }
+  })
+
+  it('reports no pending reconnect once the timer fired, while the attempt still runs', async () => {
+    const { engine, attempts } = connectedRoom()
+    engine.handleDisconnect('leave-reconnect')
+    expect(engine.pendingReconnect).toBe(true)
+    await macrotask()
+    expect(attempts).toHaveLength(1)
+    expect(engine.pendingReconnect).toBe(false)
+  })
+
+  it('delivers TrackSubscribed of a connected room at once while that attempt runs', async () => {
+    const { room, engine, internals } = connectedRoom()
+    engine.handleDisconnect('leave-reconnect')
+    await macrotask()
+    const delivered: unknown[] = []
+    room.on(RoomEvent.TrackSubscribed, (track) => delivered.push(track))
+    const track = { kind: 'video' }
+    internals.emitWhenConnected(RoomEvent.TrackSubscribed, track, {}, {})
+    expect(delivered).toEqual([track])
+    expect(internals.bufferedEvents).toHaveLength(0)
+  })
+
+  it('still buffers events while a reconnect is scheduled', () => {
+    const { room, engine, internals } = connectedRoom()
+    engine.handleDisconnect('leave-reconnect')
+    const delivered: unknown[] = []
+    room.on(RoomEvent.TrackSubscribed, (track) => delivered.push(track))
+    internals.emitWhenConnected(RoomEvent.TrackSubscribed, { kind: 'video' }, {}, {})
+    expect(delivered).toHaveLength(0)
+    expect(internals.bufferedEvents).toHaveLength(1)
+  })
+
+  it('leaves no pending reconnect when a scheduled timer is cancelled', async () => {
+    const { engine, attempts } = connectedRoom()
+    engine.handleDisconnect('leave-reconnect')
+    engine.clearReconnectTimeout()
+    expect(engine.pendingReconnect).toBe(false)
+    await macrotask()
+    expect(attempts).toHaveLength(0)
+  })
+
+  it('leaves no pending reconnect when a successful attempt cancels a timer scheduled during it', async () => {
+    const { engine, attempts } = connectedRoom()
+    engine.handleDisconnect('leave-reconnect')
+    await macrotask()
+    // Something asks for another reconnect while the first attempt runs; the attempt then succeeds.
+    engine.handleDisconnect('signal')
+    expect(engine.pendingReconnect).toBe(true)
+    engine.clearPendingReconnect()
+    expect(engine.pendingReconnect).toBe(false)
+    await macrotask()
+    expect(attempts).toHaveLength(1)
   })
 })
