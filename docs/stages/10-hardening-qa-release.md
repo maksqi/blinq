@@ -306,7 +306,11 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       packets but decodes no frames (`framesDecoded` 0, no blocked or undecryptable state, no notice); the console shows
       `Could not unset participant on cryptor` for the peer's tracks. livekit-client 2.22.3 uses `createEncodedStreams`
       on Chromium (cryptor state per track id); Firefox recovers. `call/reconnect` keeps it as `fixme` for `chromium`
-      only, so nightly `msedge` fails it (fix-server 3ed23b5) — owner: fix-call — status: open
+      only, so nightly `msedge` fails it (fix-server 3ed23b5). Root cause (livekit-client 2.22.3 and upstream main):
+      `RTCEngine` keeps `pendingReconnect` true until the whole attempt settles, but the Room emits `Reconnected` about
+      2 s earlier, so every `emitWhenConnected` event of that window (the new `TrackSubscribed` included) is buffered and
+      never flushed: no E2EE receiver transform, no audio element. Firefox and Safari can lose the same race and then
+      decode without a transform (fails open, F-015) — owner: fix-call — status: open
 - [ ] F-068 [low] e2e — `perf/budget` counted 16 preloaded files twice (Chromium lists the `link` preload and the
       `script` entry, the second from the HTTP cache), so the call route summed to 477.9 KiB and was skipped as
       "pending F-043"; counted once it is 438.9 KiB (docs) — owner: orchestrator — status: open
