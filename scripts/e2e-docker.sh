@@ -16,7 +16,7 @@
 # The checkout is mounted at its own absolute path, so test-results/, playwright-report/, logs/e2e/ and .data/e2e/
 # land in it as in host mode. The exit code is Playwright's.
 # Forwarded into the runner: E2E_*, SWARM_*, PLAYWRIGHT_* and PW_* variables, CI, DEBUG and NO_COLOR.
-# E2E_LIVEKIT_SEND_SIDE_BWE=true starts the runner's LiveKit with send-side bandwidth estimation.
+# E2E_LIVEKIT_SEND_SIDE_BWE=false starts the runner's LiveKit without send-side bandwidth estimation (on by default).
 # The whole run holds the machine-wide heavy lock (scripts/with-lock.sh): one E2E run at a time.
 set -eu
 
@@ -100,7 +100,7 @@ if ! runner_compose up -d --wait --quiet-pull; then
   fail "the runner stack did not become healthy"
 fi
 node_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$RUNNER")
-log "runner stack is up (LiveKit node_ip $node_ip, send-side BWE ${E2E_LIVEKIT_SEND_SIDE_BWE:-false})"
+log "runner stack is up (LiveKit node_ip $node_ip, send-side BWE ${E2E_LIVEKIT_SEND_SIDE_BWE:-true})"
 
 # Forward the caller's E2E and Playwright settings. `-e NAME` takes the value from this environment, so values never
 # appear on a command line. The runner's own settings (container names, mode) are never overridden.

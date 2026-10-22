@@ -35,6 +35,9 @@ services:
           tcp_port: 7881
           udp_port: 7882
           use_external_ip: false
+          # As production (docker-compose.yml, F-065).
+          congestion_control:
+            use_send_side_bwe: true
         keys:
           devkey: dev-only-livekit-secret-not-for-production-000000
         webhook:

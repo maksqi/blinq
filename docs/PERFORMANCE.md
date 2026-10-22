@@ -318,17 +318,16 @@ A headless bot on a fast desktop core needs about half a core for a 25-person gr
 | plain livekit-client, receiver does not publish | 1280, 750 kbit/s | 640 after 8 s, 320 after 26 s; 5–10 fps | 640 after 15 s, 1280 not within 30 s | none |
 | plain livekit-client, receiver publishes its camera (like blinq) | 1280, 740 kbit/s | still 1280, about 460 kbit/s, 0 fps after 12 s | instant | none |
 | same, LiveKit with `congestion_control.use_send_side_bwe: true` | 1280, 780 kbit/s | still 1280; about 220 kbit/s and 5 fps after 25 s (frame rate reduced) | 1280 at 20 fps after 10 s | none |
-| blinq in the Docker runner (Linux, one network namespace), default congestion control, 2 runs | 1280, 690–720 kbit/s, 20 fps | drop within 3 s; still 1280; 250 kbit/s, median 4.9 fps | top layer after 3 s and 11 s | none |
-| same, `use_send_side_bwe: true`, 2 runs | 1280, 690–720 kbit/s, 20 fps | 1280 at 4.9 fps; and 640 at 7.4 fps (9.4 fps in the last 30 s) | top layer after 4 s and 10 s | none |
+| blinq in the Docker runner (Linux, one network namespace), default congestion control, 6 runs (2026-10-22) | 1280, 690–730 kbit/s, 20 fps | drop within 3–4 s; still 1280 at about 440 kbit/s; median 0 fps in all 6 (frozen) | top layer after 3–6 s | none |
+| same, `use_send_side_bwe: true`, 6 runs | 1280, 690–730 kbit/s, 20 fps | 640 in 5 of 6 runs, 180–230 kbit/s, median 5–10 fps | top layer after 4–10 s | none |
 
 - The connection survives: no `Disconnected`, no end screen, no reconnect, in any run.
-- **F-065 (accepted):** on the macOS host (Docker Desktop's port forwarding in the media path) a subscriber that also
-  publishes its camera over the bad link stayed on the 720p layer and the picture froze (median 0 fps) until the
-  network recovered. In the Docker runner, where the browsers and LiveKit share a Linux network namespace like a
-  Linux server, the same test keeps the video moving at about 5 fps with LiveKit's default congestion control, so
-  `degradation.spec.ts` now asserts at least 3 fps. Send-side bandwidth estimation moved the receiver to 640 in one of
-  two runs (7–9 fps); it is not LiveKit's default, so blinq keeps the default until measurements on real networks
-  (Stage 9b) show a clear gain.
+- **F-065 (fixed):** with LiveKit's default congestion control (receiver reports), a subscriber that also publishes
+  its camera over the bad link is never moved to a lower layer; the 720p layer keeps overrunning the link and the
+  picture freezes until the network recovers (6 of 6 runs in the Docker runner; two earlier runs that kept about 5 fps
+  were the exception). With send-side bandwidth estimation (TWCC) the receiver moves to 640 and keeps 5–10 fps in all
+  6 runs, and the top layer returns within 10 s. Production, the dev stack and the runner therefore set
+  `rtc.congestion_control.use_send_side_bwe: true`, and `degradation.spec.ts` asserts at least 3 fps.
 
 ## 6. Sizing
 

@@ -228,7 +228,7 @@ test(
     await receiverContext.close()
     await hostContext.close()
 
-    // F-065: the freeze measured on the macOS host (median 0 fps) does not happen in the Docker runner or on Linux.
+    // F-065: with LiveKit's default congestion control the picture froze here (median 0 fps); send-side BWE fixes it.
     expect(result.degraded.medianFpsLast30s, 'the SFU adapts and the video keeps moving').toBeGreaterThanOrEqual(
       MIN_ADAPTED_FPS,
     )

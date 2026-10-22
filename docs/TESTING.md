@@ -239,7 +239,7 @@ The first run of a checkout installs and builds from scratch (a few minutes); la
 |---|---|
 | `E2E_SKIP_BUILD=1` | reuses the test build in the `.output` volume; fails unless it is a Linux test build |
 | `E2E_DB_NAME` | the test database (default `blinq_e2e`) |
-| `E2E_LIVEKIT_SEND_SIDE_BWE=true` | starts the runner's LiveKit with `rtc.congestion_control.use_send_side_bwe` (A/B runs; default `false`) |
+| `E2E_LIVEKIT_SEND_SIDE_BWE=false` | starts the runner's LiveKit without `rtc.congestion_control.use_send_side_bwe` (A/B runs; default `true`, like production) |
 | `E2E_BUILD_HEAP_MB` | Node heap for the build in the runner (default 4096; Docker Desktop's VM is shared with other containers) |
 | `E2E_HOST=1` | macOS: the old host mode with host browsers, which play audio through the speakers |
 

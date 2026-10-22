@@ -100,7 +100,8 @@ services:
         exec /livekit-server --node-ip "$$node_ip"
     environment:
       # As docker-compose.dev.yml (strict parsing: an unknown key stops the server), with webhooks to the app in this
-      # namespace. E2E_LIVEKIT_SEND_SIDE_BWE=true switches to send-side bandwidth estimation for A/B runs.
+      # namespace. Send-side bandwidth estimation is on like production (F-065); E2E_LIVEKIT_SEND_SIDE_BWE=false turns it
+      # off for A/B runs.
       LIVEKIT_CONFIG: |
         port: 7880
         rtc:
@@ -108,7 +109,7 @@ services:
           udp_port: 7882
           use_external_ip: false
           congestion_control:
-            use_send_side_bwe: ${E2E_LIVEKIT_SEND_SIDE_BWE:-false}
+            use_send_side_bwe: ${E2E_LIVEKIT_SEND_SIDE_BWE:-true}
         keys:
           devkey: dev-only-livekit-secret-not-for-production-000000
         webhook:

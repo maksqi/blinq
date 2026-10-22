@@ -93,6 +93,10 @@ services:
           interfaces:
             excludes:
               - docker0
+          # Send-side bandwidth estimation (TWCC): with the default, a subscriber that also publishes over a bad link
+          # stays on the top layer and its video freezes (docs/PERFORMANCE.md §5.5, F-065).
+          congestion_control:
+            use_send_side_bwe: true
         turn:
           enabled: true
           udp_port: ${LIVEKIT_TURN_UDP_PORT:-3478}
