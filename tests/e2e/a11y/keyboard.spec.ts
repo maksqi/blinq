@@ -16,7 +16,6 @@ import {
   expect,
   expectFocusTrapped,
   longMotion,
-  notePending,
   removePeer,
   tabKey,
   tabTo,
@@ -275,17 +274,10 @@ test.describe('keyboard in the call', () => {
       await page.keyboard.press('Escape')
       await expect(endDialog).toBeHidden()
       await settle(page)
-      // pending finding: the end-meeting dialog lacks the F-056 return-focus fix (useReturnFocus). It opens while the
-      // host-controls popover closes, so it hands focus back to "End meeting for all" inside the popover, which is gone
-      // by then, and focus falls to <body> whenever the popover has not yet returned focus to its trigger (seen in the
-      // Docker runner, Chromium). The fix agent restores the assertion.
-      const endFocus = await activeElement(page)
-      if (endFocus === 'body') notePending('focus after closing the end-meeting dialog falls to <body>', endFocus)
-      else {
-        expect
-          .soft(endFocus, 'focus after closing the end-meeting dialog')
-          .toMatch(/Host controls|End meeting|host-end-meeting/i)
-      }
+      // The dialog opens from a button inside the closing popover; focus goes back to the Host controls button (F-072).
+      expect
+        .soft(await activeElement(page), 'focus after closing the end-meeting dialog')
+        .toMatch(/Host controls|End meeting|host-end-meeting/i)
 
       // Chat: a message from the peer lands in a live log.
       await openPanel(page, 'chat')

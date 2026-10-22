@@ -4,7 +4,8 @@
  *
  * Only moderators fetch (the moderation menu is theirs). Refetch: when the people panel opens, on the
  * `participant.changed` hint, after each own action and on `participant.joined/left` (debounced 200 ms). Failures keep
- * the last good list.
+ * the last good list. Nothing is fetched once the local participant starts leaving: the server ends their row while the
+ * phase is still `inCall`, so a fetch then would only answer 403.
  */
 import { onMounted, shallowRef, type ShallowRef } from 'vue'
 import type { CallParticipantInfo } from '#shared/schemas/calls'
@@ -36,9 +37,22 @@ function createStore(ctx: CallContext): ParticipantInfoStore {
   let inflight: Promise<void> | null = null
   let again = false
   let disposed = false
+  let leaving = false
+  const stopTimer = () => {
+    if (timer) clearTimeout(timer)
+    timer = null
+  }
+  const offLeaving = ctx.events.on('call.leaving', () => {
+    leaving = true
+    stopTimer()
+  })
 
   const enabled = () =>
-    !disposed && ctx.phase.value === 'inCall' && Boolean(ctx.roomId.value) && isModeratorRole(ctx.self.value?.role)
+    !disposed &&
+    !leaving &&
+    ctx.phase.value === 'inCall' &&
+    Boolean(ctx.roomId.value) &&
+    isModeratorRole(ctx.self.value?.role)
 
   async function fetchOnce(): Promise<void> {
     try {
@@ -72,8 +86,8 @@ function createStore(ctx: CallContext): ParticipantInfoStore {
     byIdentity,
     loaded,
     refresh(delayMs = INFO_DEBOUNCE_MS) {
-      if (disposed) return
-      if (timer) clearTimeout(timer)
+      if (disposed || leaving) return
+      stopTimer()
       timer = setTimeout(() => {
         timer = null
         void refreshNow()
@@ -82,8 +96,8 @@ function createStore(ctx: CallContext): ParticipantInfoStore {
     refreshNow,
     dispose() {
       disposed = true
-      if (timer) clearTimeout(timer)
-      timer = null
+      stopTimer()
+      offLeaving()
     },
   }
 }

@@ -401,6 +401,7 @@ export class CallSession {
   async leave(): Promise<void> {
     if (!this.room) return
     this.leaving = true
+    this.events.emit('call.leaving', undefined)
     await this.stopScreenShare().catch(() => undefined)
     if (this.room.state !== ConnectionState.Disconnected) await this.room.disconnect(true)
     this.setPhaseInternal('left')

@@ -483,13 +483,7 @@ const FRAMEWORK_NOISE: RegExp[] = [
  * Console errors of known product defects, allowed until they are fixed; each entry names its pending finding and the
  * fix agent deletes it.
  */
-const PENDING_FINDINGS: RegExp[] = [
-  // pending finding: a moderator's debounced `GET /api/calls/:roomId/participants` refetch (useParticipantInfo.ts,
-  // 200 ms after a participant hint or an own action) still runs while its own leave is in progress: `enabled()` checks
-  // only the phase, which stays inCall during `room.disconnect()`. Once the server has ended the row it answers 403,
-  // which the browser logs. Multi-peer teardowns hit it (security/external-requests, collab/host-actions).
-  /^Failed to load resource: the server responded with a status of 403 \(Forbidden\)\nhttp:\/\/[^/\s]+\/api\/calls\/[0-9a-f-]{36}\/participants$/,
-]
+const PENDING_FINDINGS: RegExp[] = []
 
 /**
  * Whether `text` (a console message, or `name: message` of an uncaught error) is one of the benign messages above.

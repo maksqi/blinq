@@ -6,7 +6,7 @@
  * or the metadata confirms it, and falls back with an error toast when the request fails.
  */
 import { KeyRoundIcon, MicOffIcon, PhoneOffIcon, ShieldCheckIcon } from '@lucide/vue'
-import { computed, shallowRef, watch } from 'vue'
+import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 import RotateKeyLink from './RotateKeyLink.vue'
 import {
   AlertDialog,
@@ -48,6 +48,7 @@ const actions = callActions(ctx)
 const hostState = hostActionsState(ctx)
 
 const open = shallowRef(false)
+const trigger = useTemplateRef<HTMLButtonElement>('trigger')
 const muteAllOpen = shallowRef(false)
 const endOpen = shallowRef(false)
 const preventSelfUnmute = shallowRef(false)
@@ -111,6 +112,14 @@ function openEnd() {
   endOpen.value = true
 }
 
+// Both dialogs open from a button inside the popover, which is gone when they close: hand focus back to the Host
+// controls button instead of letting it fall to <body> (WCAG 2.4.3, F-072).
+function focusTrigger(event: Event) {
+  if (!trigger.value?.isConnected) return
+  event.preventDefault()
+  trigger.value.focus()
+}
+
 async function muteAll() {
   mutingAll.value = true
   try {
@@ -138,6 +147,7 @@ const reminder = computed(() => (hostState.removedCount.value > 0 ? rotateRemind
   <Popover v-model:open="open">
     <PopoverTrigger as-child>
       <button
+        ref="trigger"
         type="button"
         aria-label="Host controls"
         title="Host controls"
@@ -251,7 +261,7 @@ const reminder = computed(() => (hostState.removedCount.value > 0 ? rotateRemind
   </Popover>
 
   <Dialog v-model:open="muteAllOpen">
-    <DialogContent class="sm:max-w-md" data-testid="mute-all-dialog">
+    <DialogContent class="sm:max-w-md" data-testid="mute-all-dialog" @close-auto-focus="focusTrigger">
       <DialogHeader>
         <DialogTitle>Mute everyone?</DialogTitle>
         <DialogDescription
@@ -276,7 +286,7 @@ const reminder = computed(() => (hostState.removedCount.value > 0 ? rotateRemind
   </Dialog>
 
   <AlertDialog v-model:open="endOpen">
-    <AlertDialogContent data-testid="end-meeting-dialog">
+    <AlertDialogContent data-testid="end-meeting-dialog" @close-auto-focus="focusTrigger">
       <AlertDialogHeader>
         <AlertDialogTitle>End the meeting for everyone?</AlertDialogTitle>
         <AlertDialogDescription>

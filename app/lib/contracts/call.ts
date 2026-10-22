@@ -121,6 +121,8 @@ export interface CallEventMap {
   'room.state': RoomMetadata
   'server.hint': { type: string }
   'call.phase': CallPhase
+  /** The local participant started leaving; the phase stays `inCall` until the room is closed. */
+  'call.leaving': undefined
   'unencrypted.blocked': { identity: string }
 }
 

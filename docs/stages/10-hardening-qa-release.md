@@ -328,6 +328,17 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       pre-join label `#prejoin-effects-blur-label` is 2.84:1 (#565d66 on #0c1117); axe serious color-contrast (Docker
       runner, Firefox) — owner: orchestrator — status: fixed (the field is no longer marked disabled; the toggles dim
       themselves and the label and reason keep full contrast)
+- [x] F-072 [low] a11y — closing the end-meeting or mute-all dialog (opened from the host-controls popover) dropped
+      focus on `<body>` (WCAG 2.4.3; e2e-stabilize) — owner: orchestrator — status: fixed (focus returns to the Host
+      controls button; `a11y/keyboard` asserts it again)
+- [x] F-073 [low] call — a moderator's debounced participants refetch still ran during their own leave (the phase stays
+      `inCall` during `room.disconnect()`), so the server answered 403 and the browser logged it (e2e-stabilize) —
+      owner: orchestrator — status: fixed (`call.leaving` event; no fetch once leaving; unit test; the E2E allowance is
+      gone)
+- [x] F-074 [low] deps — upstream noise: livekit-client leaves `AudioContext.resume()` unhandled (Firefox logs
+      "Navigated away from page" when a test navigates during it) and retries `play()` on a processor element;
+      @livekit/track-processors does not close a VideoFrame on teardown (e2e-stabilize) — owner: orchestrator — status:
+      accepted (harmless console messages, allowed by exact text in `tests/e2e/fixtures/base.ts`; report upstream)
 
 ## Tests
 - API: `tests/api/security/{authz-matrix,idor,csrf,rate-limits,cookies,headers}.test.ts`.
