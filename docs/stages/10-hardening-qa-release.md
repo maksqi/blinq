@@ -314,6 +314,11 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
 - [ ] F-068 [low] e2e — `perf/budget` counted 16 preloaded files twice (Chromium lists the `link` preload and the
       `script` entry, the second from the HTTP cache), so the call route summed to 477.9 KiB and was skipped as
       "pending F-043"; counted once it is 438.9 KiB (docs) — owner: orchestrator — status: open
+- [ ] F-069 [low] e2e — `auth/first-admin` fills the login form right after `goto`, before hydration (the race
+      `security/log-scan` and `rooms/key-leak` had, fixed by e2e-docker c18f641) — owner: orchestrator — status: open
+- [x] F-070 [low] ui — text typed into a form before hydration is wiped when the page hydrates (seen on `/login`
+      in the Docker runner) (e2e-docker) — owner: orchestrator — status: accepted (submit stays disabled until
+      hydration, so nothing is sent or leaked (F-020); it only costs retyping on a slow first load; backlog)
 
 ## Tests
 - API: `tests/api/security/{authz-matrix,idor,csrf,rate-limits,cookies,headers}.test.ts`.
