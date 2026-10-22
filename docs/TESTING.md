@@ -382,9 +382,13 @@ click does nothing, and mounting `v-model` resets fields filled in so far (F-069
 runner made specs hit both. The wait is skipped for `waitUntil: 'commit'`, non-HTML answers, pages without
 `#__nuxt`, and contexts with JavaScript off (the test's `javaScriptEnabled: false`, or
 `guards.watch(context, { hydration: false })`), as in the F-020 pre-hydration specs (`auth/prehydration`). After a full
-navigation that the page starts itself (`window.location`), call `waitForHydration(page)`. Call pages
-(`/dev/call`, `/m/<slug>`) are opened with `waitUntil: 'domcontentloaded'`: Firefox can hold back `load` while a
-preview `<video>` has no data (F-064), so the pre-join screen is the readiness signal.
+navigation that the page starts itself (`window.location`), call `waitForHydration(page)`.
+
+**Call pages.** A watched page's `goto` (and `reload`) of a call page (`/dev/call`, `/m/<slug>`, any letter case)
+without an explicit `waitUntil` waits for `commit`, then for hydration, never for `load` or `DOMContentLoaded`: in a
+long run Firefox sometimes reports neither for a fully rendered call page (F-064; seen in the Docker runner on four
+specs of one run, never in a fresh browser: 0 of 300 navigations). The caller's own signal, usually the pre-join
+screen, marks the page ready.
 
 `rooms/key-leak.spec.ts` (Stage 04) goes further. It records every request URL and body, WebSocket frame and SSE URL,
 then searches them, a `pg_dump` of the test database and both logs for `K` and everything derived from it.
