@@ -89,6 +89,8 @@ test.describe('secrets in logs', () => {
     track(account.password, 'password')
     track(wrong, 'wrong password')
     await page.goto('/login')
+    // Sign in is enabled once the page has hydrated; hydration resets fields that were filled before it.
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeEnabled()
     await page.getByLabel('Email').fill(account.email)
     await page.getByLabel('Password', { exact: true }).fill(wrong)
     await page.getByRole('button', { name: 'Sign in' }).click()

@@ -91,6 +91,9 @@ test.describe('key hygiene', () => {
     const host = await rooms.createUser({ displayName: 'Kim Keyholder' })
     await rooms.useIdentity(context, host)
     await page.goto('/dashboard')
+    // A click before hydration does nothing (the button has no handler yet), so wait for the app and its chunks.
+    await page.waitForFunction(() => Boolean((document.querySelector('#__nuxt') as { __vue_app__?: unknown } | null)?.__vue_app__))
+    await page.waitForLoadState('networkidle')
     await page.getByTestId('new-room').click()
     await page.getByTestId('create-room-dialog').getByLabel('Name').fill('Key hygiene')
     await spendJoinBudget(2)
