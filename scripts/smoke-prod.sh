@@ -250,7 +250,9 @@ until compose exec -T caddy test -f "/data/caddy/certificates/local/$SMOKE_DOMAI
   [ "$(date +%s)" -lt "$deadline" ] || die "Caddy did not issue the internal certificates within 60 s"
   sleep 1
 done
-compose cp caddy:/data/caddy/pki/authorities/local/root.crt "$OUT/caddy-root.crt" > /dev/null 2>&1 ||
+# Written in place, not replaced: Docker Desktop's file sharing can keep serving a replaced file's old entry to the next
+# container for a while, and the Playwright container then found no CA file at all.
+compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt > "$OUT/caddy-root.crt" 2> /dev/null ||
   die "could not copy Caddy's root certificate"
 pass "Caddy issued certificates for $SMOKE_DOMAIN and $SMOKE_TURN_DOMAIN (internal CA)"
 

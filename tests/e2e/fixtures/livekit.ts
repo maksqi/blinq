@@ -28,6 +28,9 @@ import { expect, test as base } from './base'
 export type Role = 'host' | 'cohost' | 'participant'
 export type Engine = 'chromium' | 'firefox'
 
+
+/** How long the teardown waits for a peer's graceful leave before closing its context. */
+const LEAVE_TIMEOUT_MS = 10_000
 export interface TestRoom {
   name: string
   slug: string
@@ -276,9 +279,11 @@ export const test = base.extend<LiveKitFixtures>({
       return { page, context, identity, name, role, room, token: jwt, url }
     })
 
-    // Leave gracefully first: tearing down a live connection makes the SDK log data-channel errors (Firefox).
+    // Leave gracefully first: tearing down a live connection makes the SDK log data-channel errors (Firefox). Bounded:
+    // a page whose main thread is busy (software-rendered blur in the Docker runner) must not hold the teardown until
+    // the test timeout; closing the context below ends it anyway.
     for (const joined of joinedPages) {
-      await joined
+      const leave = joined
         .evaluate(async () => {
           const hooks = (
             window as unknown as { __blinqTest?: { state: { harness?: { leave?: () => Promise<void> } } } }
@@ -286,6 +291,7 @@ export const test = base.extend<LiveKitFixtures>({
           await hooks?.state.harness?.leave?.()
         })
         .catch(() => undefined)
+      await Promise.race([leave, new Promise((resolve) => setTimeout(resolve, LEAVE_TIMEOUT_MS))])
     }
     for (const context of contexts) await context.close().catch(() => undefined)
     for (const other of launched.values()) await other.close().catch(() => undefined)
