@@ -50,7 +50,7 @@ describe.skipIf(usesFakeLivekit())('RoomServiceAdapter against LiveKit', () => {
     await create(name)
     expect(await service.getParticipant(name, newIdentity())).toBeNull()
     expect(isLivekitNotFound(await service.updateParticipant(name, newIdentity(), { name: 'x' }).catch((error: unknown) => error))).toBe(true)
-    const payload = new TextEncoder().encode('{"type":"room.changed"}')
+    const payload = new TextEncoder().encode('{"type":"lobby.changed"}')
     await expect(service.sendData(name, payload, { topic: 'blinq.srv.v1', destinationIdentities: [] })).resolves.toBeUndefined()
     await expect(service.sendData(name, payload, { topic: 'blinq.srv.v1', destinationIdentities: [newIdentity()] })).resolves.toBeUndefined()
   })

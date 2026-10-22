@@ -1,12 +1,8 @@
-/**
- * Route inventory: every route in docs/API.md has a handler under server/api (and vice versa), and every handler
- * that is still a W0a stub answers 501 with the error envelope. Implemented routes drop out automatically.
- */
-import { randomUUID } from 'node:crypto'
+/** Route inventory: every route in docs/API.md has a handler under server/api (and vice versa). */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createClient, REPO_ROOT } from '../_harness'
+import { REPO_ROOT } from '../_harness'
 
 interface Route {
   method: string
@@ -15,7 +11,6 @@ interface Route {
 
 interface FileRoute extends Route {
   file: string
-  implemented: boolean
 }
 
 const shape = (route: Route) => `${route.method} ${route.path.replace(/:[A-Za-z]+/g, ':param')}`
@@ -33,7 +28,6 @@ function fileRoutes(): FileRoute[] {
       method: match[2]!.toUpperCase(),
       path: `/api/${parts.join('/')}`,
       file: `server/api/${file}`,
-      implemented: !readFileSync(join(root, file), 'utf8').includes('notImplemented('),
     }
   })
 }
@@ -48,12 +42,6 @@ function documentedRoutes(): Route[] {
     routes.push({ method: match[1]!, path })
   }
   return routes
-}
-
-const SAMPLES: Record<string, string> = { slug: 'abc-defg-hjk', seq: '0', identity: 'p_0123456789abcdef' }
-
-function concrete(path: string): string {
-  return path.replace(/:([A-Za-z]+)/g, (_, name: string) => SAMPLES[name] ?? randomUUID())
 }
 
 describe('route inventory', () => {
@@ -73,22 +61,5 @@ describe('route inventory', () => {
   it('documents every handler file in docs/API.md', () => {
     const known = new Set(documented.map(shape))
     expect(files.filter((route) => !known.has(shape(route))).map((route) => route.file)).toEqual([])
-  })
-})
-
-describe('unimplemented routes', () => {
-  const stubs = fileRoutes().filter((route) => !route.implemented)
-
-  if (stubs.length === 0) {
-    it.skip('every route is implemented', () => {})
-    return
-  }
-
-  it.each(stubs)('$method $path answers 501 with the error envelope', async (route) => {
-    const res = await createClient().request(route.method, concrete(route.path))
-    expect(res.status, `${route.file}: ${res.text}`).toBe(501)
-    expect(res.body).toMatchObject({ statusCode: 501, data: { code: 'INTERNAL' } })
-    expect(res.body.statusMessage).toMatch(/^Not implemented yet \([a-z-]+\)$/)
-    expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })

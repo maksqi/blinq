@@ -235,7 +235,7 @@ describe('server hints (blinq.srv.v1)', () => {
 
   it('are emitted as server.hint when they come from the server (no sender)', async () => {
     const { messaging, hints } = setup()
-    for (const type of ['lobby.changed', 'participant.changed', 'ask-unmute', 'room.changed']) {
+    for (const type of ['lobby.changed', 'participant.changed', 'ask-unmute']) {
       await messaging.handlePacket({
         payload: hint(type),
         senderIdentity: undefined,
@@ -243,7 +243,7 @@ describe('server hints (blinq.srv.v1)', () => {
         encryptionType: Encryption_Type.NONE,
       })
     }
-    expect(hints).toEqual(['lobby.changed', 'participant.changed', 'ask-unmute', 'room.changed'])
+    expect(hints).toEqual(['lobby.changed', 'participant.changed', 'ask-unmute'])
   })
 
   it('are dropped when a participant sends them, encrypted or not', async () => {
@@ -267,7 +267,7 @@ describe('server hints (blinq.srv.v1)', () => {
     await messaging.handlePacket({ ...server, payload: utf8('not json') })
     await messaging.handlePacket({
       ...server,
-      payload: utf8(JSON.stringify({ type: 'room.changed', token: 'x'.repeat(2000) })),
+      payload: utf8(JSON.stringify({ type: 'lobby.changed', token: 'x'.repeat(2000) })),
     })
     await messaging.handlePacket({ ...server, payload: new Uint8Array([0xff, 0xfe]) })
     expect(hints).toEqual([])

@@ -75,10 +75,10 @@ frame-ancestors 'none'`.
 
 | Domain | Code → status |
 |---|---|
-| common | `VALIDATION_FAILED` 400 · `CSRF_REJECTED` 403 · `RATE_LIMITED` 429 · `UNAUTHENTICATED` 401 · `FORBIDDEN` 403 · `NOT_FOUND` 404 · `CONFLICT` 409 · `INTERNAL` 500 (501 for unimplemented stubs) · `SERVICE_UNAVAILABLE` 503 |
+| common | `VALIDATION_FAILED` 400 · `CSRF_REJECTED` 403 · `RATE_LIMITED` 429 · `UNAUTHENTICATED` 401 · `FORBIDDEN` 403 · `NOT_FOUND` 404 · `CONFLICT` 409 · `INTERNAL` 500 · `SERVICE_UNAVAILABLE` 503 |
 | auth | `AUTH_INVALID_CREDENTIALS` 401 · `AUTH_PASSWORD_CHANGE_REQUIRED` 403 · `AUTH_PASSWORD_WEAK` 400 · `AUTH_ACCOUNT_DISABLED` 403 · `AUTH_EMAIL_NOT_VERIFIED` 403 · `AUTH_TOKEN_INVALID` 400 · `AUTH_TOKEN_EXPIRED` 400 · `REGISTRATION_CLOSED` 403 · `REGISTRATION_DOMAIN_NOT_ALLOWED` 403 · `INVITE_INVALID` 400 · `INVITE_EXPIRED` 410 · `INVITE_USED` 410 |
 | rooms / join / calls | `ROOM_NOT_FOUND` 404 · `ROOM_LIMIT_REACHED` 409 · `ROOM_KEY_INVALID` 403 · `ROOM_LOCKED` 403 · `ROOM_FULL` 409 · `ROOM_PASSWORD_REQUIRED` 403 · `ROOM_PASSWORD_INVALID` 403 · `ROOM_GUESTS_NOT_ALLOWED` 403 · `ROOM_INVITE_REQUIRED` 403 · `ROOM_INVITE_INVALID` 403 · `JOIN_REMOVED` 403 · `JOIN_DENIED` 403 · `LOBBY_FULL` 409 · `MEETING_LIVE` 409 · `CALL_NOT_PARTICIPANT` 403 · `CALL_FORBIDDEN` 403 |
-| recording | `RECORDING_DISABLED` 403 · `RECORDING_ACTIVE` 409 · `RECORDING_NOT_ALLOWED` 403 · `RECORDING_QUOTA_EXCEEDED` 409 · `RECORDING_TOO_LARGE` 413 · `RECORDING_INVALID_MEDIA` 422 · `RECORDING_NOT_READY` 409 |
+| recording | `RECORDING_DISABLED` 403 · `RECORDING_ACTIVE` 409 · `RECORDING_NOT_ALLOWED` 403 · `RECORDING_QUOTA_EXCEEDED` 409 · `RECORDING_TOO_LARGE` 413 · `RECORDING_NOT_READY` 409 |
 
 `CONFLICT` uses `details.reason` for specifics: `last_admin`, `self`, `slug_taken`, `email_taken`, `already_cohost`,
 `not_recording`, `not_live` (decision).
@@ -405,7 +405,7 @@ test builds, `LIVEKIT_URL=fake://local` selects an in-memory `RoomServiceAdapter
   replaces permissions as a whole.
 - **Data topics** (`DATA_TOPICS`): `blinq.chat.v1` and `blinq.reaction.v1` (client → client, reliable, app envelope);
   `blinq.srv.v1` (server → specific identities via `destinationIdentities`, plain JSON `{ type: 'lobby.changed' |
-  'participant.changed' | 'ask-unmute' | 'room.changed' }`; a hint to refetch from the API, never a token, never
+  'participant.changed' | 'ask-unmute' }`; a hint to refetch from the API, never a token, never
   destructive; it arrives unencrypted because the server holds no key, so clients accept it only from the server).
 - **App envelope** (`app/lib/e2ee/envelope.ts`): bytes `0x01 | iv(12) | AES-256-GCM ciphertext + tag(16)`; AAD = UTF-8
   `"blinq/app/v1|" + slug + "|" + senderIdentity`; plaintext UTF-8 JSON `{ id, type: 'chat' | 'reaction', from:

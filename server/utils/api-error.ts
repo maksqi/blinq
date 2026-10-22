@@ -12,12 +12,3 @@ export function apiError(code: ErrorCode, statusCode: number, details?: unknown)
     data: details === undefined ? { code } : { code, details },
   })
 }
-
-/** Placeholder for W0a stubs; every stub is replaced by its owner. */
-export function notImplemented(owner: string) {
-  return createError({
-    statusCode: 501,
-    statusMessage: `Not implemented yet (${owner})`,
-    data: { code: 'INTERNAL' },
-  })
-}

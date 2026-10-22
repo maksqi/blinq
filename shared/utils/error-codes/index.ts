@@ -54,7 +54,6 @@ export const RECORDING_ERRORS = {
   RECORDING_NOT_ALLOWED: 'Only hosts and co-hosts with an account can record.',
   RECORDING_QUOTA_EXCEEDED: 'Your recording storage quota is full. Delete recordings you no longer need.',
   RECORDING_TOO_LARGE: 'The recording exceeds the allowed size or duration. Start a new recording.',
-  RECORDING_INVALID_MEDIA: 'The recording could not be processed. Start a new recording.',
   RECORDING_NOT_READY: 'The recording is still being processed. Try again in a few minutes.',
 } as const
 

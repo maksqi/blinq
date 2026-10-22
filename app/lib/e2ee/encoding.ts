@@ -38,14 +38,6 @@ export function randomBytes(length: number): Uint8Array<ArrayBuffer> {
   return bytes
 }
 
-/** Constant-time comparison of two byte arrays of possibly different lengths. */
-export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  let diff = a.length ^ b.length
-  const length = Math.max(a.length, b.length)
-  for (let i = 0; i < length; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0)
-  return diff === 0
-}
-
 export function concatBytes(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0))
   let offset = 0

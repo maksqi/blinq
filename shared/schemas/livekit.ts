@@ -52,7 +52,7 @@ export const DATA_TOPICS = {
 } as const
 
 export const serverHintSchema = z.object({
-  type: z.enum(['lobby.changed', 'participant.changed', 'ask-unmute', 'room.changed']),
+  type: z.enum(['lobby.changed', 'participant.changed', 'ask-unmute']),
 })
 export type ServerHint = z.infer<typeof serverHintSchema>
 
