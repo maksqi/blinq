@@ -39,6 +39,8 @@ test.describe('first admin', { tag: '@ui' }, () => {
     secrets.track(newPassword, 'new admin password')
 
     await page.goto('/login')
+    // Sign in is enabled once the page has hydrated; hydration resets fields that were filled before it (F-069).
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeEnabled()
     await page.getByLabel('Email').fill(BOOTSTRAP_ADMIN.email)
     await page.getByLabel('Password', { exact: true }).fill(BOOTSTRAP_ADMIN.password)
     await page.getByRole('button', { name: 'Sign in' }).click()
@@ -51,6 +53,7 @@ test.describe('first admin', { tag: '@ui' }, () => {
     await expect(page).toHaveURL(/\/change-password$/)
     await expect(page.getByTestId('user-menu')).toHaveCount(0)
 
+    await expect(page.getByRole('button', { name: 'Save and continue' })).toBeEnabled()
     await page.getByLabel('Current password').fill(BOOTSTRAP_ADMIN.password)
     await page.getByLabel('New password', { exact: true }).fill(newPassword)
     await page.getByLabel('Repeat new password').fill(newPassword)
