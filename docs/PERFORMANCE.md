@@ -138,7 +138,7 @@ SWARM_LINK='<invite link>' pnpm exec tsx tests/load/swarm.ts --bots 8 --duration
   every host below 70% CPU (`host.cpuPercent` in the summary). On this hardware a bot costs about half a fast core
   (§5.2), so plan about 1 vCPU and 1 GB RAM per bot (planning value).
 - **One machine.** `tests/load/onbox.spec.ts` creates the room and the invite on the E2E stack (test build, e2e Caddy,
-  dev LiveKit) and runs the swarm: `SWARM_BOTS=12 SWARM_DURATION=120 E2E_HTTP_PORT=8090 sh scripts/e2e.sh --config
+  dev LiveKit) and runs the swarm: `SWARM_BOTS=12 SWARM_DURATION=120 sh scripts/e2e.sh --config
   tests/load/playwright.config.ts` (variables: `SWARM_BOTS`, `SWARM_DURATION`, `SWARM_JOIN_INTERVAL`,
   `SWARM_BOTS_PER_BROWSER`, `SWARM_VIDEO_SIZE`, `SWARM_SFU_CONTAINER`, `SWARM_OUT`).
 

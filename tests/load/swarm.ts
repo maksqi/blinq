@@ -36,7 +36,7 @@
  * --ignore-https-errors (Caddy's internal CA) · --headed · --join-timeout MS (60000) · --out FILE.
  *
  * On a single machine against the E2E stack (test build, e2e Caddy, dev LiveKit), `tests/load/onbox.spec.ts` creates
- * the room and invite and runs this swarm: `E2E_HTTP_PORT=8090 sh scripts/e2e.sh --config tests/load/playwright.config.ts`.
+ * the room and invite and runs this swarm: `sh scripts/e2e.sh --config tests/load/playwright.config.ts`.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, writeFileSync } from 'node:fs'

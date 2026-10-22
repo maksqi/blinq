@@ -5,7 +5,7 @@ agents from breaking each other's runs. Tools: Vitest 5 with `@nuxt/test-utils` 
 security properties the tests must prove are listed in [`SECURITY.md` §10](SECURITY.md#10-verification). Every stage
 file names the test or command that proves each DoD item.
 
-Owner: `devops-ci` from W0b on. `TODO(devops-ci)` marks details that are filled in as the harness is built.
+Owner: `devops-ci` from W0b on; the orchestrator after Wave 3.
 `(decision)` marks a choice this document makes where the plan left it open.
 
 ## 1. Test pyramid
@@ -31,10 +31,11 @@ Owner: `devops-ci` from W0b on. `TODO(devops-ci)` marks details that are filled 
 | `pnpm exec vitest run --project nuxt` | Nuxt-environment component tests (no package script yet) |
 | `sh scripts/with-lock.sh pnpm test:api` | API tests; the global setup builds the test server first |
 | `sh scripts/with-lock.sh pnpm build:test` | the test build (`BLINQ_TEST_HOOKS=1`) that E2E runs against |
-| `sh scripts/with-lock.sh pnpm test:e2e` | Playwright, all projects (needs the setup in §6.2) |
-| `pnpm test:e2e --project=firefox call/e2ee` | one project, spec paths matching `call/e2ee`; add `--debug` for a headed, stepping run |
+| `pnpm test:e2e` | `sh scripts/e2e.sh`: on macOS the Docker runner (§6.2), on Linux and in CI the host mode; takes the lock itself |
+| `pnpm test:e2e --project=firefox call/e2ee` | one project, spec paths matching `call/e2ee` (arguments go to Playwright) |
+| `pnpm test:e2e:docker` | the Docker runner directly, on any OS (`sh scripts/e2e-docker.sh`) |
 | `pnpm exec playwright show-report` | the last HTML report; `pnpm exec playwright show-trace <zip>` opens a failure trace |
-| `pnpm exec playwright install chromium firefox webkit` | once per machine (the nightly Edge job also installs `msedge`) |
+| `pnpm exec playwright install chromium firefox webkit` | host mode only (Linux, CI, `E2E_HOST=1`); the Docker runner brings its browsers |
 | `pnpm check:english` | fails on any Cyrillic character in tracked and new files |
 
 Arguments: pnpm 11 forwards everything after the script name, including a literal `--`.
@@ -90,9 +91,10 @@ tests/fixtures/media/                          reference and malicious media fil
 All files share one server, limiter store and settings cache. So API files run one at a time (single fork,
 `fileParallelism: false`), and tests that change admin settings restore them in `afterEach`.
 
-Helpers next to it (exact names: TODO(server-core)): an HTTP client with a cookie jar and `api.as(user)`; factories
-(`createUser`, `createAdmin`, `createSession`, `createRoom`, `createRoomInvite`, `createMeeting`,
-`createParticipant`); a Mailpit client; `signWebhook()`; `uniqueIp()`.
+Helpers next to it (`tests/api/_harness/index.ts`): `createClient()` (an `ApiClient` with a cookie jar and its own
+`X-Forwarded-For` from `uniqueIp()`), `expectApiError()`; factories (`createUser`, `createAdmin`, `createSession`,
+`loginAs`, `createRoom`, `createRoomInvite`, `createInvite`, `createMeeting`, `createGuestSession`,
+`createParticipant`); a Mailpit client (`waitForMessage`, `expectNoMessage`, `extractFragmentToken`); `signWebhook()`.
 
 ### 5.2 Rules
 
@@ -301,7 +303,7 @@ start no test browser, so they may run on the host.
 - Fake devices produce moving video and a tone. Specs assert decoded frames and non-silent audio, never pixel content.
 - Screen share uses the `useFakeScreenSource` hook (a 1920×1080 canvas), not the desktop picker, so it is deterministic.
 - For a Chromium ↔ Firefox call in one test, `joinAs` launches the other browser with the same flags or prefs.
-- Nightly adds Edge (`channel: 'msedge'`) and macOS WebKit: TODO(devops-ci).
+- Nightly adds Edge (`channel: 'msedge'`, nightly.yml on Linux x64). macOS WebKit with E2EE is checked by hand (§9).
 - Tags, set with the `tag` option (`test('login renders', { tag: '@ui' }, async ({ page }) => { … })`): `@ui` (no media
   or E2EE; also runs in `webkit-ui`), `@responsive` (also runs in `mobile-chromium`), `@nightly` (nightly.yml only; PR
   runs pass `--grep-invert @nightly`) (decision).

@@ -61,4 +61,4 @@ if (existsSync('scripts/vendor-assets.mjs')) run('node', ['scripts/vendor-assets
 
 console.log(`\nworktree ready: agent=${agent} port=${port} database=${database}`)
 console.log(`start the app with: pnpm dev   (http://localhost:${port})`)
-console.log('run E2E with:       sh scripts/e2e.sh --project=chromium tests/e2e/<area>   (stop pnpm dev first)')
+console.log('run E2E with:       sh scripts/e2e.sh --project=chromium tests/e2e/<area>   (the Docker runner on macOS)')

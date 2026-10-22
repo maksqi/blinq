@@ -75,7 +75,7 @@ merges, runs the full gate, and commits locally. **Nothing is pushed** until the
 
 Agent ports (W2): `rooms-ui` 3002, `collab-ui` 3003, `media-fx` 3004, `recording-client` 3005, `admin` 3006 (no LiveKit
 webhooks needed). 3000 and 3001 stay free for the maintainer's own dev server. On this machine another project holds
-port 8080, so E2E runs use `E2E_HTTP_PORT=8090`.
+port 8080, so host-mode E2E runs used `E2E_HTTP_PORT=8090`; the Docker runner (W3) publishes no host port.
 
 Wave base SHAs (filled in by the orchestrator):
 
