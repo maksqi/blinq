@@ -319,9 +319,10 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
 - [x] F-070 [low] ui — text typed into a form before hydration is wiped when the page hydrates (seen on `/login`
       in the Docker runner) (e2e-docker) — owner: orchestrator — status: accepted (submit stays disabled until
       hydration, so nothing is sent or leaked (F-020); it only costs retyping on a slow first load; backlog)
-- [ ] F-071 [low] a11y — when background blur is unavailable (no WebGL, e.g. Firefox without a GPU) the dimmed
+- [x] F-071 [low] a11y — when background blur is unavailable (no WebGL, e.g. Firefox without a GPU) the dimmed
       pre-join label `#prejoin-effects-blur-label` is 2.84:1 (#565d66 on #0c1117); axe serious color-contrast (Docker
-      runner, Firefox) — owner: orchestrator (after fix-call) — status: open
+      runner, Firefox) — owner: orchestrator — status: fixed (the field is no longer marked disabled; the toggles dim
+      themselves and the label and reason keep full contrast)
 
 ## Tests
 - API: `tests/api/security/{authz-matrix,idor,csrf,rate-limits,cookies,headers}.test.ts`.
