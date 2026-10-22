@@ -28,7 +28,7 @@ index ad55a83819c0e24fde8a65784395b2f797bab99f..fb9b5932385c513b25a7f27096c06baa
        if (isFrameServerInjected(encodedFrame.data, this.sifTrailer)) {
          encodedFrame.data = encodedFrame.data.slice(0, encodedFrame.data.byteLength - this.sifTrailer.byteLength);
 diff --git a/dist/livekit-client.esm.mjs b/dist/livekit-client.esm.mjs
-index 0bdf98540d93d7deb581737dca7afb299308d307..4a524135c45f9ec1438060718eda4ef1240d3dca 100644
+index 0bdf98540d93d7deb581737dca7afb299308d307..9a8887e7dc76efe2ab4060df6a59f58a3ed934b5 100644
 --- a/dist/livekit-client.esm.mjs
 +++ b/dist/livekit-client.esm.mjs
 @@ -22647,6 +22647,7 @@ class LocalTrack extends Track {
@@ -128,7 +128,29 @@ index 0bdf98540d93d7deb581737dca7afb299308d307..4a524135c45f9ec1438060718eda4ef1
      };
      // websocket reconnect behavior. if websocket is interrupted, and the PeerConnection
      // continues to work, we can reconnect to websocket to continue the session
-@@ -25600,7 +25634,10 @@ class RTCEngine extends eventsExports.EventEmitter {
+@@ -24522,7 +24556,20 @@ class RTCEngine extends eventsExports.EventEmitter {
+         // since the current engine may have inherited a regional url
+         this.emit(EngineEvent.TokenRefreshed, this.token);
+       }
+-      this.reconnectTimeout = CriticalTimers.setTimeout(() => this.attemptReconnect(disconnectReason).finally(() => this.reconnectTimeout = undefined), delay);
++      // blinq patch (F-067): `pendingReconnect` (this timer) now means "a reconnect is scheduled" and ends when the timer
++      // fires. 2.22.3 cleared it only after the attempt settled, but a full reconnect makes the Room emit Reconnected
++      // (and flush its buffered events) as soon as the new peer connection is up, about 2 s before the attempt ends
++      // (waitForPCReconnected sleeps minReconnectWait). Room.emitWhenConnected kept buffering every event of that
++      // window, TrackSubscribed included, and nothing flushed them again: the E2EE receiver transform was never set up
++      // and the tracks never reached the app. The attempt itself buffers through the Room state (Reconnecting) and
++      // isResuming. A superseded timer never clears a newer one.
++      const reconnectTimeout = CriticalTimers.setTimeout(() => {
++        if (this.reconnectTimeout === reconnectTimeout) {
++          this.reconnectTimeout = undefined;
++        }
++        this.attemptReconnect(disconnectReason);
++      }, delay);
++      this.reconnectTimeout = reconnectTimeout;
+     };
+     this.waitForRestarted = () => {
+       return new Promise((resolve, reject) => {
+@@ -25600,7 +25647,10 @@ class RTCEngine extends eventsExports.EventEmitter {
              value: new EncryptedPacket({
                encryptedValue: encryptedData.payload,
                iv: encryptedData.iv,
@@ -140,7 +162,18 @@ index 0bdf98540d93d7deb581737dca7afb299308d307..4a524135c45f9ec1438060718eda4ef1
              })
            };
          }
-@@ -33631,6 +33668,69 @@ class DeferrableMap extends Map {
+@@ -25889,6 +25939,10 @@ class RTCEngine extends eventsExports.EventEmitter {
+   clearReconnectTimeout() {
+     if (this.reconnectTimeout) {
+       CriticalTimers.clearTimeout(this.reconnectTimeout);
++      // blinq patch (F-067): a cancelled timer is no pending reconnect. 2.22.3 kept the id, and only the attempt's
++      // `.finally` (removed above) reset it; without that, a timer cancelled by a successful attempt or by the browser's
++      // online event would leave `pendingReconnect` true, and the Room would buffer every event for the rest of the call.
++      this.reconnectTimeout = undefined;
+     }
+   }
+   clearPendingReconnect() {
+@@ -33631,6 +33685,69 @@ class DeferrableMap extends Map {
  })(ConnectionState || (ConnectionState = {}));
  const CONNECTION_RECONCILE_FREQUENCY_MS = 4 * 1000;
  const STATS_LOG_FREQUENCY_MS = 30 * 1000;
@@ -210,7 +243,7 @@ index 0bdf98540d93d7deb581737dca7afb299308d307..4a524135c45f9ec1438060718eda4ef1
  /**
   * In LiveKit, a room is the logical grouping for a list of participants.
   * Participants in a room can publish tracks, and subscribe to others' tracks.
-@@ -33970,19 +34070,12 @@ class Room extends eventsExports.EventEmitter {
+@@ -33970,19 +34087,12 @@ class Room extends eventsExports.EventEmitter {
            track.enabled = true;
            const stream = new MediaStream([track]);
            dummyAudioEl.srcObject = stream;
@@ -234,7 +267,7 @@ index 0bdf98540d93d7deb581737dca7afb299308d307..4a524135c45f9ec1438060718eda4ef1
              dummyAudioEl === null || dummyAudioEl === void 0 ? void 0 : dummyAudioEl.remove();
              dummyAudioEl = null;
            });
-@@ -34530,32 +34623,8 @@ class Room extends eventsExports.EventEmitter {
+@@ -34530,32 +34640,8 @@ class Room extends eventsExports.EventEmitter {
        this.switchActiveDevice('audiooutput', unwrapConstraint(this.options.audioOutput.deviceId)).catch(e => this.log.warn("Could not set audio output: ".concat(e.message)));
      }
      if (isWeb()) {
