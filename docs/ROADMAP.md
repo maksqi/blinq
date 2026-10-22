@@ -148,6 +148,11 @@ The `e2e` role is split into five agents with disjoint paths:
 | `e2e-prod` | 3006 | `tests/smoke-prod/**`, `scripts/smoke-prod.sh` |
 
 - `security-review` (3007) and `quality-review` (3008) are read-only and produce reports.
+- Second half of W3 (2026-10-22): `e2e-docker` (3002) owns `docker/e2e/**`, `scripts/{e2e.sh,e2e-docker.sh}`,
+  `tests/e2e/security/log-scan.spec.ts`, `tests/e2e/rooms/key-leak.spec.ts`, `tests/load/onbox.spec.ts` and
+  `docs/TESTING.md` §6–§8; `docs` (3003) owns the paths below except `docs/TESTING.md` §6–§8; `fix-call` (3004) owns
+  the call-core and collab-ui paths plus `patches/livekit-client@*.patch`. On the maintainer's Mac, browsers run only
+  inside Docker (`scripts/e2e-docker.sh`).
 - Fix agents get the owning area of each finding (assigned in the Stage 10 Findings list, paths never overlap).
 - `docs`: `docs/**` (except files the orchestrator owns), `README.md`, `CHANGELOG.md`.
 - A test that fails because of a product bug is not fixed in the product by an `e2e-*` agent: it is skipped with a
@@ -259,3 +264,8 @@ tracked as F-001 to F-011 in the Stage 10 Findings list):
   data-channel noise, pre-join JS 414 KiB) and `e2e-perf` merged (perf budget, CDP degradation, long recording, swarm,
   on-box load results in PERFORMANCE.md). nightly.yml jobs enabled (join time, degradation, long recording, Edge);
   LiveKit limits from measurements (`LIVEKIT_MAX_TRACKS` 1600, `LIVEKIT_MAX_BYTES_PER_SEC` 62500000).
+- 2026-10-22 — W3 `fix-server` merged (F-001, F-002, F-016 to F-019, F-024 to F-026, F-028, F-032, F-039, F-046, F-047);
+  orchestrator: F-050 dead code, F-044 503 copy, docs for the new limits and caps; F-067 (Chromium full reconnect
+  decodes nothing) recorded. Gate on main: lint, typecheck, 1528 unit tests, check:english. Maintainer's decision:
+  every Playwright run happens inside Docker (fake-media sounds on the Mac). Second-half agents `e2e-docker` and `docs`
+  start from the commit after this entry; `fix-call` (F-067) starts after `e2e-docker` merges.
