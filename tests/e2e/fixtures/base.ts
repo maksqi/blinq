@@ -408,6 +408,17 @@ const FRAMEWORK_NOISE: RegExp[] = [
   /^failed to play processor element(?: JSHandle@object)?\n/,
 ]
 
+/**
+ * Whether `text` (a console message, or `name: message` of an uncaught error) is one of the benign messages above.
+ * For page watchers outside these fixtures (tests/e2e/shell/support.ts).
+ */
+export function isFrameworkNoise(text: string): boolean {
+  return FRAMEWORK_NOISE.some((pattern) => {
+    pattern.lastIndex = 0
+    return pattern.test(`${text}\n`)
+  })
+}
+
 export const test = base.extend<
   { allowConsoleErrors: (string | RegExp)[]; guards: Guards; secrets: Secrets; _e2eTest: TestState },
   { _e2eWorker: WorkerState }

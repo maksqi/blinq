@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { expect, type Page } from '@playwright/test'
+import { isFrameworkNoise } from '../fixtures/base'
 
 /**
  * Shell spec helpers. They rely only on Playwright's `baseURL`, so the specs run against `pnpm dev` today and
@@ -26,9 +27,15 @@ export async function watchPage(page: Page, options: WatchOptions = {}): Promise
   page.on('console', (message) => {
     if (message.type() !== 'error') return
     if (options.ignoreResourceErrors && message.text().startsWith('Failed to load resource')) return
+    if (isFrameworkNoise(message.text())) return
     problems.push(`console: ${message.text()}`)
   })
-  page.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`))
+  page.on('pageerror', (error) => {
+    // The same benign framework messages the fixtures allow, e.g. WebKit's cancelled build-manifest fetch after a full
+    // navigation (fixtures/base.ts).
+    if (isFrameworkNoise(`${error.name}: ${error.message}`)) return
+    problems.push(`pageerror: ${error.message}`)
+  })
   await page.exposeFunction('__blinqShellCspViolation', (detail: string) => problems.push(`csp: ${detail}`))
   await page.addInitScript(() => {
     document.addEventListener('securitypolicyviolation', (event) => {
