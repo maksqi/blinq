@@ -1,8 +1,8 @@
 # Deployment
 
 This is the full operator guide for running blinq on your own server. `README.md` has the short version. The commands
-below are exercised by the production smoke test (§15). Marker: `TODO(stage-10)` = replaced with measured numbers
-from [`PERFORMANCE.md`](PERFORMANCE.md).
+below are exercised by the production smoke test (§15). The sizing comes from the load tests in
+[`PERFORMANCE.md`](PERFORMANCE.md).
 
 ## 1. What runs
 
@@ -10,10 +10,10 @@ from [`PERFORMANCE.md`](PERFORMANCE.md).
 
 | Service | Image | Network | Role |
 |---|---|---|---|
-| `caddy` | `blinq-caddy:local` (Caddy 2.11.4 + caddy-l4) | host | HTTPS, HTTP/3, certificates, TURN/TLS routing by SNI |
-| `app` | `blinq-app:local` (Node 24, Nuxt, ffmpeg) | host, bound to `127.0.0.1` | UI and API; runs migrations and bootstrap on every start |
+| `caddy` | `blinq-caddy:local` (Caddy 2.11.4 + caddy-l4 v0.1.2) | host | HTTPS, HTTP/3, certificates, TURN/TLS routing by SNI |
+| `app` | `blinq-app:local` (Node 24.21, Nuxt, ffmpeg 9) | host, bound to `127.0.0.1` | UI and API; runs migrations and bootstrap on every start |
 | `livekit` | `livekit/livekit-server:v1.13.7` | host | SFU for encrypted media, embedded TURN |
-| `postgres` | `postgres:18-alpine` | none (unix socket only) | Database |
+| `postgres` | `postgres:18.6-alpine3.24` | none (unix socket only) | Database |
 
 Architecture and the reasons for host networking: [`ARCHITECTURE.md`](ARCHITECTURE.md). Threat model:
 [`SECURITY.md`](SECURITY.md).
@@ -21,7 +21,9 @@ Architecture and the reasons for host networking: [`ARCHITECTURE.md`](ARCHITECTU
 Every container runs with `no-new-privileges`, all capabilities dropped (Caddy keeps `NET_BIND_SERVICE`; the Postgres
 entrypoint keeps the few it needs to drop to its own user), a read-only root filesystem with tmpfs for scratch space,
 `restart: unless-stopped` and rotated logs. The app runs as uid 10001 and LiveKit as `nobody`. No service publishes
-ports, and each service receives only its own variables from `.env`.
+ports, and each service receives only its own variables from `.env`. Images are pinned to full versions; the app's
+runtime image has no package manager, and Caddy is built with patched Go modules until a Caddy release includes the
+fixes.
 
 ## 2. Server requirements
 
@@ -31,21 +33,52 @@ ports, and each service receives only its own variables from `.env`.
 - A public IPv4 address (IPv6 optional), two DNS names, and the ports in §4.
 - `sh scripts/preflight.sh` checks these requirements (§7).
 
-Sizing (all values are estimates until `TODO(stage-10)` replaces them with measurements; the derivation is in
-[`PERFORMANCE.md` §6](PERFORMANCE.md#6-initial-sizing-estimates-not-measured)):
+### Sizing
 
-| Use | vCPU | RAM | Bandwidth (symmetric) |
-|---|---|---|---|
-| Small team: about 10 people in calls at once | 2 | 4 GB | 100 Mbit/s |
-| Full 25-person meetings: one to three at once, with screen share | 4 or more | 8 GB | 500 Mbit/s – 1 Gbit/s |
+The figures come from the Stage 10 load tests: 25 real browsers with end-to-end encryption and LiveKit's own load
+generator, measured on one fast machine (an Apple M5 Max that ran the SFU, the app and every test client at once).
+The vCPU counts below are planning values derived from those measurements: a cloud vCPU is one thread of a slower
+core, so one measured core counts as two vCPU. A run on a dedicated Linux VM with separate load hosts will confirm or
+replace them (`[user]`). Method, raw results and derivation: [`PERFORMANCE.md` §5–§6](PERFORMANCE.md#6-sizing).
 
+| Deployment | vCPU | RAM | Bandwidth (symmetric) | Load |
+|---|---|---|---|---|
+| Small team | 2 | 4 GB | 100 Mbit/s | about 10 people in calls at once |
+| One full meeting | 4–6 | 8 GB | 250 Mbit/s | one 25-person meeting with a screen share, plus a few small calls |
+| Each further full meeting | + 4 | + 1–2 GB | + 200 Mbit/s | |
+
+Measured for one full meeting (25 people, cameras and microphones on, everyone in the 5×5 grid):
+- SFU CPU: 1.9 cores of the test machine with real browsers, which is about 4 vCPU (planning value).
+- SFU RAM: about 1 GB.
+- Egress (server to participants): 118–140 Mbit/s, plus about 56 Mbit/s for a 1080p screen share at 15 fps. Real
+  networks add retransmissions, so plan 200 Mbit/s. Ingress: 7–10 Mbit/s in the full grid, up to about 25 Mbit/s in
+  smaller meetings where tiles are large.
+- Traffic: 53–88 GB of egress per meeting hour (without and with a screen share); check your provider's egress
+  pricing.
+- Smaller meetings cost less per person: 13 people took 0.57 cores and 57 Mbit/s.
+
+Other requirements:
 - The minimum is 2 vCPU and 2 GB RAM (the preflight fails below that and warns below 4 vCPU / 4 GB).
-- Recording processing uses a RAM-backed work area of up to `RECORDING_WORK_TMPFS_SIZE` (default `4g`) while a job
-  runs. Add it to the RAM figure if you record.
-- Disk: about 10 GB for images and the database, plus recordings (roughly 1–1.8 GB per recorded hour at 1080p,
-  estimate).
-- Traffic: one full 25-person meeting sends roughly 70–150 GB per hour from the server (estimate); check your
-  provider's egress pricing.
+- Recording: while a job runs, the server's ffmpeg uses `FFMPEG_THREADS` (default 2) and a RAM-backed work area of up
+  to `RECORDING_WORK_TMPFS_SIZE` (default `4g`). Add both if you record. The recorder uploads at most about 1.2 GB per
+  recording hour (2.5 Mbit/s of 1080p video plus 128 kbit/s of audio).
+- Disk: about 10 GB for images and the database, plus recordings. Plan 1–1.8 GB per recorded hour at 1080p (planning
+  value: the server re-encodes with no bitrate cap, so the size depends on the picture; the synthetic test video
+  measured so far stored 0.17 GB per hour, a lower bound).
+
+### LiveKit limits
+
+LiveKit refuses new participants once the server forwards more tracks or bytes than two optional `.env` settings
+allow, so an overloaded server does not degrade every meeting on it. The defaults fit the 4-vCPU reference server on a
+plan of 500 Mbit/s or more; set both to your server (derivation:
+[`PERFORMANCE.md` §8](PERFORMANCE.md#8-livekit-limits)):
+
+| `.env` | Default | Set it to |
+|---|---|---|
+| `LIVEKIT_MAX_TRACKS` | `1600` | about 400 per vCPU (a full meeting is about 1250 tracks, in and out): `800` on 2 vCPU, `2400` on 6, `3200` on 8 |
+| `LIVEKIT_MAX_BYTES_PER_SEC` | `62500000` (500 Mbit/s) | your bandwidth plan in bytes per second, Mbit/s × 125000 (a full meeting is about 15–25 MB/s): `12500000` for 100 Mbit/s, `31250000` for 250 Mbit/s |
+
+`0` turns a limit off. `docker compose up -d livekit` applies a change and interrupts the calls in progress.
 
 ## 3. DNS
 
@@ -215,8 +248,8 @@ Set `TLS_MODE` in `.env`:
    every `warn` line. It checks Linux, Docker ≥ 28.0.1 and Compose v2, `.env` (mode 600, required values, no
    placeholders, `$` in unquoted values), that both names resolve to `LIVEKIT_NODE_IP` or a local address, that the
    ports of §4 are free, CPU and RAM, the UDP buffers, NTP and free disk space.
-6. Start: `docker compose up -d --wait`. The first run builds both images: about 2 minutes on a fast 10-core machine,
-   plan for 5–10 minutes on a small server (estimate). The command returns once every container is healthy; with the
+6. Start: `docker compose up -d --wait`. The first run builds both images: about 2 minutes on a fast 10-core machine;
+   allow 5–10 minutes on a small server (not measured). The command returns once every container is healthy; with the
    images built, that took 6–13 seconds on the smoke stack (Postgres initializes the database, then the app migrates
    it and creates the admin). With `TLS_MODE=acme`, Caddy requests the certificates in the background meanwhile,
    which takes a few more seconds before `https://DOMAIN` answers. If it fails, see §12.
@@ -304,7 +337,7 @@ docker compose logs -f app              # app logs (startup summary, requests, e
 docker compose logs --since 1h caddy    # certificates, access log (JSON)
 docker compose logs livekit             # media server, TURN
 curl -fsS https://meet.example.com/api/health   # liveness
-curl -fsS https://meet.example.com/api/ready    # database and LiveKit reachable
+curl -fsS https://meet.example.com/api/ready    # database reachable and migrations applied; LiveKit reported
 ```
 
 - `LOG_FORMAT=json` makes app logs machine-readable for log shippers; `LOG_LEVEL` controls verbosity.
@@ -386,8 +419,42 @@ work area is too small (`RECORDING_WORK_TMPFS_SIZE` should be about twice the lo
 `FFMPEG_TIMEOUT_MINUTES`, the disk is full, or the browser produced media outside the allowlist. Failed recordings
 are never served; the error is shown in the recordings list.
 
-**"This browser is not supported".** The browser lacks the APIs needed for end-to-end encryption. See the browser
-matrix in `README.md`.
+**"This browser can't join encrypted calls".** The browser lacks the APIs needed for end-to-end encryption, and blinq
+never falls back to an unencrypted call. Use a current Chrome, Edge, Firefox or Safari (README, "Browser support").
+
+**Sign-in answers "Too many attempts" (429).** Failed sign-ins are counted per network (an IPv4 address or an IPv6
+/64), per network and account, and per account. After 5 failures on a key the wait starts at about a second and
+doubles with every further failure, up to 15 minutes; `Retry-After` says how long, and failures older than 24 hours no
+longer count. There is no lockout: the account key only slows networks that already failed for that account, so the
+owner can always sign in from another network, and any password reset (§11, an admin reset or the emailed link) clears
+the account's wait. More than 8 sign-ins in flight from one network, or more than 16 passwords queued for hashing on
+the server (4 are hashed at once), also answer 429, with `Retry-After: 1`. Many of those at once usually mean a login
+flood: `docker compose logs caddy` shows where it comes from.
+
+**People behind one address get "Too many attempts" when they join.** Joining allows 30 requests per minute per
+network (IPv4 address or IPv6 /64), and each join takes two, so about 15 people per minute can join from behind one
+office NAT. The others wait for the minute to pass and try again. Waiting-room screens are capped at 50 per network
+(429 with `Retry-After: 10`).
+
+**Someone lands in the waiting room although the room has none.** After a participant is removed or denied, everyone
+who joins from the same network (IPv4 address or IPv6 /64) goes through the waiting room for the rest of the meeting,
+so a removed person cannot come straight back. A host or co-host admits the others from the waiting-room panel. A
+removed person who has an invite link and switches networks can still ask to join again: lock the room or revoke the
+link to stop that.
+
+**Joining fails with "The meeting service isn't available" (503).** Either the app cannot reach LiveKit, or the server
+is too busy: a join waits at most 15 seconds for its room's lock. For LiveKit, `/api/ready` (§10) reports
+`checks.livekit` as `down`, `docker compose logs app | grep 'LiveKit call failed'` names the failed operation, and
+`docker compose ps livekit` and `docker compose logs livekit` show why. In-call host
+actions and recording also answer 503 while LiveKit is unreachable. A busy server recovers by itself; if it happens
+often, check CPU and the database (`docker stats`, `docker compose logs app postgres`) against the sizing in §2.
+
+**New participants can't connect while big meetings run.** The server may have reached `LIVEKIT_MAX_TRACKS` or
+`LIVEKIT_MAX_BYTES_PER_SEC` (§2), where LiveKit refuses new participants. Raise them only if CPU and bandwidth have room.
+
+**A request answers 413.** Request bodies are limited to 1 MB (20 MB under `/api/recordings/`, where one recording
+chunk may be up to 16 MiB), by Caddy and again by the app, which also counts bodies sent without a length. The web app
+stays far below that; a 413 points at a script or client that sends too much.
 
 ## 13. Security hardening
 
