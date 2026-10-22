@@ -132,9 +132,9 @@ low), location, reproduction and owner area.
       estimate in README and `docs/DEPLOYMENT.md` (`TODO(stage-10)`); troubleshooting updated from the fixes;
       `docs/TESTING.md` gets the manual browser matrix table (Chrome, Edge, Firefox, Safari macOS, Safari iOS, Android
       Chrome) for the user to fill in.
-- [ ] `docs`: drift in `docs/API.md`, `docs/SECURITY.md` or `docs/ARCHITECTURE.md` goes to the orchestrator as exact
+- [x] `docs`: drift in `docs/API.md`, `docs/SECURITY.md` or `docs/ARCHITECTURE.md` goes to the orchestrator as exact
       edits.
-- [ ] `docs`: `CHANGELOG.md` in Keep a Changelog format with `## [1.0.0] - <date>`: Added, Security, Known limitations
+- [x] `docs`: `CHANGELOG.md` in Keep a Changelog format with `## [1.0.0] - <date>`: Added, Security, Known limitations
       (the non-goals from `docs/SECURITY.md`).
 - [ ] `orchestrator`: `package.json` version `1.0.0`; full gate; commit `chore(release): v1.0.0`; local tag
       `v1.0.0-rc.1` for Stage 9b (decision), then `git tag -a v1.0.0 -m "blinq v1.0.0"` after 9b passes. No push.
