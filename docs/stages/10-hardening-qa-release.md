@@ -339,6 +339,11 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       "Navigated away from page" when a test navigates during it) and retries `play()` on a processor element;
       @livekit/track-processors does not close a VideoFrame on teardown (e2e-stabilize) — owner: orchestrator — status:
       accepted (harmless console messages, allowed by exact text in `tests/e2e/fixtures/base.ts`; report upstream)
+- [x] F-075 [high] deps — `pnpm audit --prod --audit-level high` failed again at release time: new advisories for
+      source-map-js (in `.output`), vite, launch-editor, shell-quote and simple-git (orchestrator, 2026-10-22) — owner:
+      orchestrator — status: fixed (pnpm overrides to source-map-js 1.2.2, vite 8.3.4, launch-editor 2.14.2, shell-quote
+      1.12.0; the simple-git and @simple-git/argv-parser advisories are excepted with reasons in `pnpm-workspace.yaml`:
+      @nuxt/devtools only, the fix needs simple-git 4)
 
 ## Tests
 - API: `tests/api/security/{authz-matrix,idor,csrf,rate-limits,cookies,headers}.test.ts`.
