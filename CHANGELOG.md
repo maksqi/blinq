@@ -188,8 +188,9 @@ with `docker compose up`.
 - **Browsers:** no screen sharing on iOS or Android; no speaker selection on Safari, iOS or Android; Safari before 17.2
   sends video without simulcast; browsers without support for end-to-end encryption cannot join. Safari on macOS is
   tested by hand, not automatically.
-- **Poor networks:** under heavy packet loss, a participant who also sends video can see others' video freeze until
-  the network recovers. The call stays connected.
+- **Poor networks:** under heavy packet loss (tested: 5 % loss, 150 ms, 500 kbit/s) video drops to a few frames per
+  second and keeps a high resolution rather than switching to a lower layer; the call stays connected and recovers
+  within seconds.
 - **Sizing** is measured on one machine; the figures for a Linux VM are planning values until they are confirmed on a
   dedicated server.
 - **Deployment:** Linux with Docker Engine only (Docker Desktop is not supported in production), and no CDN or other

@@ -295,10 +295,12 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
 - [x] F-064 [low] call — Firefox sometimes never fires `load` on a fully rendered pre-join page (a guest in
       `rooms/key-leak` hung for 113 s with no request pending); `openToPrejoin` now waits for `domcontentloaded` — owner:
       fix-call — status: fixed (fix-call 7b04c73: pre-join devices open after `load`; not reproducible on macOS, unconfirmed)
-- [ ] F-065 [medium] infra — under the CDP degradation (5 % loss, 150 ms, 500 kbit/s) a receiver that also publishes is
+- [x] F-065 [medium] infra — under the CDP degradation (5 % loss, 150 ms, 500 kbit/s) a receiver that also publishes is
       never moved to a lower layer and its picture freezes (median 0 fps); no disconnect, recovery in 3 s. LiveKit's
       `rtc.congestion_control.use_send_side_bwe: true` kept about 5 fps in a manual probe (e2e-perf) — owner:
-      orchestrator — status: open
+      orchestrator — status: accepted (the freeze came from the macOS host's media path: in the Docker runner the
+      default congestion control keeps about 5 fps and recovers in 3–11 s; send-side BWE moved to 640 in one of two
+      runs but is not LiveKit's default; `network/degradation` now asserts ≥ 3 fps; PERFORMANCE.md §5.5)
 - [x] F-066 [low] infra — Caddy's default zstd level is ~3 % larger than gzip-5 and the `.tflite` model is served
       uncompressed — owner: orchestrator — status: accepted (the budget is measured with the production encoder; the
       model is 244 KB of mostly incompressible weights, loaded only when blur is turned on)
