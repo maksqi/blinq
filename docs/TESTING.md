@@ -386,7 +386,12 @@ Local equivalents of the CI-only checks:
 ## 9. Manual cross-browser matrix `[user]`
 
 Run before the release (Stage 10) on real devices, against a deployment installed by following the README. Replace
-each cell with `pass`, `fail (#issue)` or `n/a`. "expect hidden" passes when the control is not offered.
+each cell with `pass`, `fail (#issue)` or `n/a`. "expect hidden" passes when the control is not offered. The automated
+coverage it complements is listed in the README ("Browser support").
+
+blinq version under test: `1.0.0-rc.1`, the local tag of the release candidate that Stage 9b installs. On the server,
+`git describe --tags` in the checkout prints the tag; the app's startup log line (`docker compose logs app`) shows the
+package version, `1.0.0`.
 
 | Check | Chrome | Edge | Firefox | Safari macOS | Safari iOS | Chrome Android |
 |---|---|---|---|---|---|---|
@@ -401,20 +406,29 @@ each cell with `pass`, `fail (#issue)` or `n/a`. "expect hidden" passes when the
 | Chat | TODO [user] | TODO [user] | TODO [user] | TODO [user] | TODO [user] | TODO [user] |
 | Responsive layout | TODO [user] | TODO [user] | TODO [user] | TODO [user] | TODO [user] | TODO [user] |
 
-Tested: TODO [user] (date, tester, browser and OS versions, blinq version).
+Tested: TODO [user] (date, tester, browser and OS versions, blinq version or tag).
 
-How to check each row:
-- **Join + E2EE:** two devices join one room; the E2EE badge is green on both and the safety codes match.
-- **Camera/mic switching:** change devices during the call; the other side gets the new device without a rejoin.
-- **Speaker selection:** choose another output where the picker is offered.
-- **Screen share:** share a window at 1080p; text is readable on the receiver; stopping restores the layout.
-- **Blur, noise suppression:** toggle in pre-join and in the call; the effect reaches the other side without a
-  republish; RNNoise audibly removes fan or keyboard noise.
-- **Recording:** record about 1 min in server mode and in local-only mode; both play back with audio and video, and
-  everyone sees the REC indicator.
+How to check each row (a signed-in host creates the room on the dashboard and shares an invite link from the room page
+or the in-call Invite button; the other devices join with that link):
+- **Join + E2EE:** two devices join one room. The green badge at the top left of the call says "Encrypted" on both
+  (phones show only its shield icon); open it on each device: the safety codes match.
+- **Camera/mic switching:** during the call, pick another camera and microphone from the arrow next to the Camera and
+  Microphone buttons (or More options → Settings → Devices); the other side gets the new device without a rejoin.
+- **Speaker selection:** where the picker is offered (the arrow next to Microphone, or Settings → Devices → Speaker),
+  choose another output; the sound moves to it.
+- **Screen share:** Share screen, pick a window; with the default limits it is sent at up to 1080p and 15 fps. Text is
+  readable on the receiver, and Stop presenting restores the layout.
+- **Background blur:** in pre-join and in the call (More options → Blur background, or Settings → Video and audio
+  effects: Off, Light, Strong); the other side sees the change without the video restarting.
+- **Noise suppression (RNNoise):** choose "Enhanced (RNNoise)" under noise suppression, in pre-join or in Settings;
+  fan or keyboard noise audibly disappears on the other side, without the audio restarting.
+- **Recording:** a host or co-host with an account presses Record and records about 1 min with "Record to the server",
+  then with "Save to this device only". Everyone sees the REC indicator while it runs; the server recording plays with
+  audio and video under Recordings, and the local file plays on the recording device.
 - **Hotkeys:** M (mic), V (camera), Space (push-to-talk while muted), ? (help); repeat with a Cyrillic layout active.
 - **Chat:** messages reach every device; `<img src=x onerror=alert(1)>` shows as text.
-- **Responsive layout:** portrait and landscape; the control bar stays reachable; no horizontal scrolling.
+- **Responsive layout:** portrait and landscape; the control bar stays reachable; no horizontal scrolling. Phones show
+  up to 6 tiles per page.
 
 Known platform limits:
 - iOS and Android browsers offer no screen capture to web pages, so blinq hides the screen-share button there.
