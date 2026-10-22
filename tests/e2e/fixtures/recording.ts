@@ -437,7 +437,10 @@ export const test = roomsTest.extend<{ recordingCall: RecordingCallFixture }>({
       const grant = await rooms.waitForAdmission(join)
       await rooms.useIdentity(target.context(), 'id' in who ? who : join)
       const extra = new URLSearchParams(params).toString()
-      await target.goto(`${rooms.harnessPath(room, grant, name)}${extra ? `&${extra}` : ''}`)
+      // Not `load`: Firefox can hold it back while a preview <video> has no data yet (F-064); the pre-join is the signal.
+      await target.goto(`${rooms.harnessPath(room, grant, name)}${extra ? `&${extra}` : ''}`, {
+        waitUntil: 'domcontentloaded',
+      })
       await expect(target.getByTestId('prejoin')).toBeVisible({ timeout: 20_000 })
       await target.getByTestId('join-button').click()
       await waitForPhase(target, 'inCall')

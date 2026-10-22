@@ -11,7 +11,8 @@ test.describe('disabling a user in a call', () => {
     const room = await rooms.createRoom(user, { waitingRoom: false })
     const joined = await rooms.join(room, user)
     await rooms.useIdentity(page.context(), user)
-    await page.goto(rooms.harnessPath(room, joined.grant!, user.displayName))
+    // Not `load`: Firefox can hold it back while a preview <video> has no data yet (F-064).
+    await page.goto(rooms.harnessPath(room, joined.grant!, user.displayName), { waitUntil: 'domcontentloaded' })
     await page.getByTestId('join-button').click()
     await waitForPhase(page, 'inCall')
 

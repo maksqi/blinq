@@ -35,7 +35,8 @@ async function expectPrejoinShows(page: Page, blur: BlurLevel, noise: NoiseMode,
 /** A full page load of the harness (the page strips its fragment, so a plain goto would not reload). */
 async function reload(page: Page, url: string): Promise<void> {
   await page.goto('about:blank')
-  await page.goto(url)
+  // Not `load`: Firefox can hold it back while a preview <video> has no data yet (F-064); the pre-join is the signal.
+  await page.goto(url, { waitUntil: 'domcontentloaded' })
   await expect(page.getByTestId('prejoin')).toBeVisible({ timeout: 20_000 })
 }
 

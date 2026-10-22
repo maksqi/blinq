@@ -101,7 +101,10 @@ export const test = base.extend<{ collab: CollabFixture }>({
         ...(options.camera === false ? { cam: '0' } : {}),
         ...(options.microphone === false ? { mic: '0' } : {}),
       }).toString()
-      await page.goto(rooms.harnessPath(room, join.grant, name) + (extra ? `&${extra}` : ''))
+      // Not `load`: Firefox can hold it back while a preview <video> has no data yet (F-064); the pre-join is the signal.
+      await page.goto(rooms.harnessPath(room, join.grant, name) + (extra ? `&${extra}` : ''), {
+        waitUntil: 'domcontentloaded',
+      })
       await expect(page.getByTestId('prejoin')).toBeVisible({ timeout: 20_000 })
       await page.getByTestId('join-button').click()
       await waitForPhase(page, 'inCall')
