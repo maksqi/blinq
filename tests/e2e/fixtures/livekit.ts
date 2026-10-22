@@ -10,7 +10,7 @@
  * - Each participant gets its own browser context (or the test's own `page`); `browser: 'firefox' | 'chromium'`
  *   launches the other engine with the same fake-media flags as playwright.config.ts.
  *
- * Helpers for specs: `callState`, `inboundVideo`, `inboundAudio`, `subscriptions`, `waitForRemoteFrames`.
+ * Helpers for specs: `callState`, `inboundVideo`, `inboundAudio`, `receivers`, `subscriptions`, `waitForRemoteFrames`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import {
@@ -335,6 +335,16 @@ export interface InboundAudio {
   packetsReceived: number
 }
 
+/** `state.receivers`: one subscribed remote track (F-067). */
+export interface ReceiverEntry {
+  identity: string
+  source: string
+  /** blinq's TrackSubscribed handler accepted it (it may be attached and played). */
+  ready: boolean
+  /** livekit-client set up its decrypting receiver transform. */
+  transform: boolean
+}
+
 export interface SubscriptionEntry {
   identity: string
   source: string
@@ -370,6 +380,12 @@ export async function inboundVideo(page: Page, identity?: string, source = 'came
 export async function inboundAudio(page: Page, identity?: string): Promise<InboundAudio[]> {
   const all = (await hookState<Record<string, InboundAudio>>(page, 'inboundAudio')) ?? {}
   return Object.values(all).filter((a) => !identity || a.identity === identity)
+}
+
+/** Subscribed remote tracks this page holds, with their receiver state, for one publisher. */
+export async function receivers(page: Page, identity?: string): Promise<ReceiverEntry[]> {
+  const all = (await hookState<Record<string, ReceiverEntry>>(page, 'receivers')) ?? {}
+  return Object.values(all).filter((r) => !identity || r.identity === identity)
 }
 
 export async function subscriptions(page: Page, identity?: string): Promise<SubscriptionEntry[]> {

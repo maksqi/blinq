@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@tanstack/vue-form@1.33.5': c11974d2f52f6d8badac8f71a063d00cc1eb11801236dcb741fe38674d7c7d8d
-  livekit-client@2.22.3: 66bc264ac310c86cd8031c4015a1b76f0817974e9c54c7065c0dc7cf8ca93531
+  livekit-client@2.22.3: 53211f3db1e128e938b861decfa44a3e49513a55856b2ffb398d5185303d4f05
 
 importers:
 
@@ -17,7 +17,7 @@ importers:
         version: 5.3.0
       '@livekit/track-processors':
         specifier: ^0.8.1
-        version: 0.8.1(@types/dom-mediacapture-transform@0.1.12)(livekit-client@2.22.3(patch_hash=66bc264ac310c86cd8031c4015a1b76f0817974e9c54c7065c0dc7cf8ca93531)(@types/dom-mediacapture-record@1.0.22))
+        version: 0.8.1(@types/dom-mediacapture-transform@0.1.12)(livekit-client@2.22.3(patch_hash=53211f3db1e128e938b861decfa44a3e49513a55856b2ffb398d5185303d4f05)(@types/dom-mediacapture-record@1.0.22))
       '@lucide/vue':
         specifier: ^1.48.0
         version: 1.48.0(vue@3.5.43(typescript@6.0.3))
@@ -62,7 +62,7 @@ importers:
         version: 1.15.11
       livekit-client:
         specifier: ^2.22.3
-        version: 2.22.3(patch_hash=66bc264ac310c86cd8031c4015a1b76f0817974e9c54c7065c0dc7cf8ca93531)(@types/dom-mediacapture-record@1.0.22)
+        version: 2.22.3(patch_hash=53211f3db1e128e938b861decfa44a3e49513a55856b2ffb398d5185303d4f05)(@types/dom-mediacapture-record@1.0.22)
       livekit-server-sdk:
         specifier: ^2.19.1
         version: 2.19.1
@@ -6897,11 +6897,11 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 1.10.1
 
-  '@livekit/track-processors@0.8.1(@types/dom-mediacapture-transform@0.1.12)(livekit-client@2.22.3(patch_hash=66bc264ac310c86cd8031c4015a1b76f0817974e9c54c7065c0dc7cf8ca93531)(@types/dom-mediacapture-record@1.0.22))':
+  '@livekit/track-processors@0.8.1(@types/dom-mediacapture-transform@0.1.12)(livekit-client@2.22.3(patch_hash=53211f3db1e128e938b861decfa44a3e49513a55856b2ffb398d5185303d4f05)(@types/dom-mediacapture-record@1.0.22))':
     dependencies:
       '@mediapipe/tasks-vision': 0.10.14
       '@types/dom-mediacapture-transform': 0.1.12
-      livekit-client: 2.22.3(patch_hash=66bc264ac310c86cd8031c4015a1b76f0817974e9c54c7065c0dc7cf8ca93531)(@types/dom-mediacapture-record@1.0.22)
+      livekit-client: 2.22.3(patch_hash=53211f3db1e128e938b861decfa44a3e49513a55856b2ffb398d5185303d4f05)(@types/dom-mediacapture-record@1.0.22)
 
   '@lucide/vue@1.48.0(vue@3.5.43(typescript@6.0.3))':
     dependencies:
@@ -10220,7 +10220,7 @@ snapshots:
     transitivePeerDependencies:
       - srvx
 
-  livekit-client@2.22.3(patch_hash=66bc264ac310c86cd8031c4015a1b76f0817974e9c54c7065c0dc7cf8ca93531)(@types/dom-mediacapture-record@1.0.22):
+  livekit-client@2.22.3(patch_hash=53211f3db1e128e938b861decfa44a3e49513a55856b2ffb398d5185303d4f05)(@types/dom-mediacapture-record@1.0.22):
     dependencies:
       '@livekit/mutex': 1.1.1
       '@livekit/protocol': 1.50.4

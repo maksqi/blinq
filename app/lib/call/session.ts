@@ -46,8 +46,10 @@ import { connectRoom } from '../livekit/connect'
 import { LocalMedia } from '../livekit/local-media'
 import { waitUntilRunning } from '../livekit/mic-chain-check'
 import { DEFAULT_MEDIA_LIMITS, screenSharePreset, type MediaLimits } from '../livekit/presets'
+import { acceptReceiver, hasE2EEReceiver, receiverReady } from '../livekit/receiver-guard'
+import { ReceiverWatchdog, type WatchedTrack } from '../livekit/receiver-watchdog'
 import { createRoom } from '../livekit/room-factory'
-import { collectInboundStats } from '../livekit/stats'
+import { collectInboundStats, videoDecodeSample } from '../livekit/stats'
 import { SubscriptionManager, sourceName } from '../livekit/subscription-manager'
 import type { SubscriptionPlan } from '../livekit/subscription-policy'
 import { canShareScreen, currentBrowserEnv, evaluateCallSupport, type CallSupport } from '../livekit/support'
@@ -108,6 +110,8 @@ type VideoSource = 'camera' | 'screen_share'
 type PublishSource = 'microphone' | 'camera'
 
 const LAST_INVITE_EXPIRY = '24h'
+/** How often the receiver watchdog looks at the subscriptions while connected. */
+const RECEIVER_CHECK_MS = 1_000
 
 function errorMessage(reason: CallErrorReason): string {
   switch (reason) {
@@ -161,6 +165,13 @@ export class CallSession {
   /** The test hook this session installed (dispose removes only its own, never a newer session's). */
   private unencryptedHook: (() => Promise<void>) | null = null
   private readonly views = new Map<string, ParticipantView>()
+  /** Identities whose media failed to decrypt (`EncryptionError`; sticky until they leave). */
+  private readonly decryptErrors = new Set<string>()
+  /** Identities with a subscribed track that does not decrypt now (the receiver watchdog; cleared on recovery). */
+  private stalled = new Set<string>()
+  private readonly watchdog = new ReceiverWatchdog()
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null
+  private watchdogBusy = false
   private viewsScheduled = false
   private audioContainer: HTMLElement | null = null
   private screenTracks: LocalTrack[] = []
@@ -365,6 +376,7 @@ export class CallSession {
     this.setPhaseInternal('inCall')
     this.scheduleViews()
     this.subscriptions?.start()
+    this.startReceiverWatchdog()
     await Promise.allSettled([this.publishLocalTracks(), Promise.resolve(this.subscriptions?.apply())])
     this.scheduleViews()
     if (this.store.outputDevice) void this.audio.setOutputDevice(this.store.outputDevice)
@@ -404,6 +416,7 @@ export class CallSession {
     this.disposed = true
     this.featureCleanup?.()
     for (const cleanup of this.cleanups.splice(0)) cleanup()
+    this.stopReceiverWatchdog()
     this.scope.stop()
     this.subscriptions?.dispose()
     this.tiles.dispose()
@@ -610,7 +623,11 @@ export class CallSession {
 
   // ---- Tracks for tiles -------------------------------------------------------------------------------------------------
 
-  /** The video track to render for a participant and source (null when off, blocked or not subscribed). */
+  /**
+   * The video track to render for a participant and source (null when off, blocked, not subscribed, or not accepted
+   * yet: a remote track is rendered only after blinq's TrackSubscribed handler saw its decrypting receiver, see
+   * receiver-guard.ts).
+   */
   videoTrack(identity: string, source: VideoSource): LocalVideoTrack | RemoteTrack | null {
     void this.trackVersion.value
     const room = this.room
@@ -625,7 +642,8 @@ export class CallSession {
     const participant = room.remoteParticipants.get(identity)
     const publication = participant?.getTrackPublication(lkSource) as RemoteTrackPublication | undefined
     if (!publication || !publication.isEncrypted || publication.isMuted) return null
-    return publication.track ?? null
+    const track = publication.track
+    return track && receiverReady(track) ? track : null
   }
 
   /** The local camera for previews (pre-join and self view). */
@@ -736,7 +754,9 @@ export class CallSession {
       })
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
         this.views.delete(participant.identity)
-        this.store.undecryptable = this.store.undecryptable.filter((id) => id !== participant.identity)
+        this.decryptErrors.delete(participant.identity)
+        this.stalled.delete(participant.identity)
+        this.syncUndecryptable()
         if (this.store.pinned === participant.identity) this.store.pinned = null
         if (this.store.activeSpeaker === participant.identity) this.store.activeSpeaker = null
         this.scheduleViews()
@@ -786,9 +806,8 @@ export class CallSession {
       })
       .on(RoomEvent.EncryptionError, (_error, participant) => {
         if (!participant || participant.isLocal) return
-        if (!this.store.undecryptable.includes(participant.identity)) {
-          this.store.undecryptable = [...this.store.undecryptable, participant.identity]
-        }
+        this.decryptErrors.add(participant.identity)
+        this.syncUndecryptable()
       })
       .on(RoomEvent.ParticipantEncryptionStatusChanged, (_encrypted, participant) => {
         if (!participant || participant.isLocal) this.store.e2eeEnabled = this.e2ee && room.isE2EEEnabled
@@ -802,6 +821,12 @@ export class CallSession {
     // happened.
     if (!publication.isEncrypted || this.isBlocked(participant.identity)) {
       publication.setSubscribed(false)
+      return
+    }
+    // livekit-client's E2EEManager handled this event before us (its listener is registered in the Room constructor);
+    // without a decrypting receiver the track is never attached, played or mixed. The receiver watchdog reports it.
+    if (!acceptReceiver(track)) {
+      console.warn('blinq: a remote track has no decrypting receiver; it is not played')
       return
     }
     if (track.kind === Track.Kind.Audio) {
@@ -853,6 +878,7 @@ export class CallSession {
   private onDisconnected(reason?: DisconnectReason) {
     if (this.disposed) return
     const outcome = outcomeForDisconnect(reason, this.leaving)
+    this.stopReceiverWatchdog()
     this.audio.dispose()
     if (outcome.phase === 'error') this.fail(outcome.reason === 'server' ? 'server' : 'connection-lost')
     else this.setPhaseInternal(outcome.phase)
@@ -996,6 +1022,65 @@ export class CallSession {
     this.audio.removeIdentity(identity)
     this.bumpTracks()
     this.scheduleViews()
+  }
+
+  /** `store.undecryptable` = decryption errors ∪ stalled receivers, in the order they were first reported. */
+  private syncUndecryptable() {
+    const wanted = new Set([...this.decryptErrors, ...this.stalled])
+    const current = this.store.undecryptable
+    const next = [...current.filter((id) => wanted.has(id)), ...[...wanted].filter((id) => !current.includes(id))]
+    if (next.length !== current.length || next.some((id, index) => id !== current[index]))
+      this.store.undecryptable = next
+  }
+
+  private startReceiverWatchdog() {
+    if (this.watchdogTimer || this.disposed) return
+    this.watchdogTimer = setInterval(() => void this.checkReceivers(), RECEIVER_CHECK_MS)
+  }
+
+  private stopReceiverWatchdog() {
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer)
+    this.watchdogTimer = null
+  }
+
+  /** One receiver watchdog pass (receiver-watchdog.ts): a subscribed track that does not decrypt is never silent. */
+  private async checkReceivers(): Promise<void> {
+    const room = this.room
+    if (!room || this.disposed || this.watchdogBusy) return
+    if (room.state !== ConnectionState.Connected) {
+      this.watchdog.reset()
+      return
+    }
+    const tracks: WatchedTrack[] = []
+    for (const participant of room.remoteParticipants.values()) {
+      if (this.isBlocked(participant.identity)) continue
+      for (const publication of participant.trackPublications.values()) {
+        const track = publication.track
+        if (!track || !publication.isEncrypted) continue
+        const receiver = track.receiver
+        tracks.push({
+          track,
+          identity: participant.identity,
+          kind: track.kind === Track.Kind.Audio ? 'audio' : 'video',
+          ready: receiverReady(track),
+          enabled: publication.isEnabled,
+          sample: () => (receiver ? videoDecodeSample(receiver) : Promise.resolve(null)),
+        })
+      }
+    }
+    this.watchdogBusy = true
+    let stalled: Set<string>
+    try {
+      stalled = await this.watchdog.check(tracks)
+    } finally {
+      this.watchdogBusy = false
+    }
+    if (this.disposed) return
+    if ([...stalled].some((identity) => !this.stalled.has(identity))) {
+      console.warn('blinq: a subscribed remote track is not decrypted; it is not played')
+    }
+    this.stalled = stalled
+    this.syncUndecryptable()
   }
 
   private scheduleViews() {
@@ -1180,6 +1265,20 @@ export class CallSession {
         hooks.state.inboundAudio = stats.audio
       })
       hooks.state.audio = this.audio.snapshot()
+      // Per subscribed remote track: accepted by blinq's TrackSubscribed handler, and a decrypting receiver (F-067).
+      const receivers: Record<string, { identity: string; source: string; ready: boolean; transform: boolean }> = {}
+      for (const participant of room.remoteParticipants.values()) {
+        for (const publication of participant.trackPublications.values()) {
+          if (!publication.track) continue
+          receivers[publication.trackSid] = {
+            identity: participant.identity,
+            source: sourceName(publication.source),
+            ready: receiverReady(publication.track),
+            transform: hasE2EEReceiver(publication.track),
+          }
+        }
+      }
+      hooks.state.receivers = receivers
     }, 500)
     this.cleanups.push(() => clearInterval(timer))
   }
