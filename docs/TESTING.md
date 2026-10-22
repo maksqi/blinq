@@ -224,7 +224,7 @@ port). The script:
 1. holds the machine-wide lock (`scripts/with-lock.sh`) for the whole run;
 2. builds the runner image `docker/e2e/runner.Dockerfile` (build context `docker/e2e/` only): the Playwright 1.63.0
    noble image pinned by digest (it must match `@playwright/test` in `pnpm-lock.yaml`), static ffmpeg/ffprobe 9 from
-   `mwader/static-ffmpeg:9.0.2`, psql, the docker CLI, PulseAudio and pnpm 11.20;
+   `mwader/static-ffmpeg:9.0.2`, psql, the docker CLI, PulseAudio, an Xvfb display and pnpm 11.20;
 3. starts `docker/e2e/runner.compose.yml` (project `blinq-e2e-docker`): the runner plus Caddy, LiveKit v1.13.7,
    Postgres 18 (data on tmpfs) and Mailpit in its network namespace, and waits until all are healthy;
 4. runs `scripts/e2e.sh` in runner mode inside the runner: `pnpm install --frozen-lockfile` into the runner's
@@ -261,6 +261,12 @@ How the runner works:
   only through PulseAudio, and without a sound server its `AudioContext` never leaves `suspended`: the mic chain falls
   back to the raw microphone (F-060) and the Web Audio specs (`media/mic-chain`, RNNoise, gain) fail. Nothing is
   played on a real device.
+- **Display.** `runner-init.sh` also starts Xvfb on `:99` (`DISPLAY` is set in the image). Headless Firefox on Linux
+  creates WebGL contexts only through an X display: without one `getContext('webgl2')` fails, background blur is
+  reported as unsupported, and the Firefox blur specs (`media/blur-swap`, `media/persistence`,
+  `media/no-external-requests`, `security/external-requests`) cannot run. No Firefox pref or EGL setting changes that
+  in headless mode. With the display, Mesa's llvmpipe renders WebGL2 on the CPU. The browsers stay headless; headless
+  Chromium (SwiftShader) and WebKit ignore the display. A Linux CI runner needs the same (`xvfb-run` or `DISPLAY`).
 - **Logs.** The app writes `logs/e2e/app.log`; the runner's Caddy writes its access log straight into
   `logs/e2e/caddy.log` (`E2E_ACCESS_LOG_OUTPUT`), so the log scan of §6.5 sees a request as soon as it is logged.
 - **Containers.** The runner mounts the Docker socket: `security/log-scan` reads `docker logs` of the runner's LiveKit
@@ -356,7 +362,12 @@ navigate there again to rejoin). The fixture also provides `createRoom()`.
 `base.ts` auto-fixtures fail the test when:
 - a `securitypolicyviolation` event fires in any page (an init script records directive, blocked URI and source);
 - a console message of type `error` or an uncaught page error appears, unless it matches the test's narrow
-  `allowConsoleErrors` list (for example a deliberate 403 in a negative test);
+  `allowConsoleErrors` list (for example a deliberate 403 in a negative test) or one of the few benign framework and
+  library messages that `FRAMEWORK_NOISE` in `base.ts` lists by their exact text, each with its cause (a build-manifest
+  fetch cancelled by a navigation; Firefox rejecting livekit-client's unhandled `AudioContext.resume()` on unload; a
+  VideoFrame dropped by the blur library's teardown; livekit-client's failed retry to play the blur processor's
+  `<video>` in Firefox), or a known product defect in `PENDING_FINDINGS` (each names its pending finding; the fix
+  agent deletes the entry);
 - a secret appears in the app log or the e2e Caddy log: any tracked value (room key, join proof, LiveKit token,
   invite/session/guest token, password) or a generic pattern (JWT-shaped `eyJ…`, `#k=`). Logs: `logs/e2e/app.log` and
   `logs/e2e/caddy.log`.
@@ -364,6 +375,25 @@ navigate there again to rejoin). The fixture also provides `createRoom()`.
 Fixture API (`base.ts`): `guards.watch(context)` for extra browser contexts, `guards.allowConsoleError(pattern)`,
 `secrets.track(value)` (values of at least 8 characters) and `secrets.expectNoLeaks()`. Secrets from the test
 environment are tracked automatically, and a final log scan runs once per worker.
+
+**Hydration.** In every watched context (the test's own and each `guards.watch(context)`), `page.goto`, `reload`,
+`goBack` and `goForward` resolve only once the Nuxt app has hydrated (`nuxtApp.isHydrating === false`, set when the
+root `<Suspense>` resolves, for client-only routes too). Before that a server-rendered button has no handler, so a
+click does nothing, and mounting `v-model` resets fields filled in so far (F-069, F-070); fast pages in the Docker
+runner made specs hit both. The wait is skipped for `waitUntil: 'commit'`, non-HTML answers, pages without
+`#__nuxt`, and contexts with JavaScript off (the test's `javaScriptEnabled: false`, or
+`guards.watch(context, { hydration: false })`), as in the F-020 pre-hydration specs (`auth/prehydration`). After a full
+navigation that the page starts itself (`window.location`), call `waitForHydration(page)`.
+
+**Call pages.** A watched page's `goto` (and `reload`) of a call page (`/dev/call`, `/m/<slug>`, any letter case)
+without an explicit `waitUntil` waits for `commit`, then for hydration, never for `load` or `DOMContentLoaded`: in a
+long run Firefox sometimes reports neither for a fully rendered call page (F-064; seen in the Docker runner on four
+specs of one run, never in a fresh browser: 0 of 300 navigations). It can even lose the commit of a fresh context's
+first navigation (the Cross-Origin-Opener-Policy process switch) while another context is in a call: the page renders,
+but Playwright, and every locator, keeps waiting for that navigation. When the commit has not arrived after 10 s but
+the page shows the target path, `goto` navigates once more to the same URL plus `?e2e-renavigate=1` (a new document of
+the same origin and opener policy, so no process switch) and the test gets a `note` annotation. The caller's own
+signal, usually the pre-join screen, marks the page ready.
 
 `rooms/key-leak.spec.ts` (Stage 04) goes further. It records every request URL and body, WebSocket frame and SSE URL,
 then searches them, a `pg_dump` of the test database and both logs for `K` and everything derived from it.

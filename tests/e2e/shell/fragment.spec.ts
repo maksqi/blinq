@@ -59,9 +59,18 @@ test.describe('fragment capture', { tag: '@ui' }, () => {
     expect(await fragmentWrites(page)).toEqual([
       ['blinq:fragment:/m/abc-defg-hjk', { kind: 'room', k: key, invalidKey: false }],
     ])
-    // The meeting page took the key and checked it with the server (the room does not exist) instead of asking for
-    // a link.
-    await expect(page.getByTestId('join-error')).toHaveAttribute('data-code', 'ROOM_NOT_FOUND')
+    // The meeting page took the key instead of asking for a link: it checked it with the server (the room does not
+    // exist). A browser without encoded transforms (Linux WebKit in webkit-ui) stops at the unsupported-browser
+    // screen before that, which is just as far from the missing-key screen (app/lib/livekit/support.ts).
+    const e2ee = await page.evaluate(
+      () =>
+        typeof (window as { RTCRtpScriptTransform?: unknown }).RTCRtpScriptTransform !== 'undefined' ||
+        (typeof RTCRtpSender !== 'undefined' && 'createEncodedStreams' in RTCRtpSender.prototype),
+    )
+    await expect(page.getByTestId('join-error')).toHaveAttribute(
+      'data-code',
+      e2ee ? 'ROOM_NOT_FOUND' : 'UNSUPPORTED_BROWSER',
+    )
     watch.expectClean()
   })
 

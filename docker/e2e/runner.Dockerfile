@@ -7,6 +7,7 @@
 # - the docker CLI: security/log-scan and rooms/key-leak read the e2e LiveKit and Postgres containers through the
 #   mounted Docker socket;
 # - PulseAudio with a null sink (runner-init.sh): without a sound server Firefox never runs an AudioContext;
+# - an Xvfb display (runner-init.sh; Xvfb and Mesa come with the base image): headless Firefox has WebGL only with one;
 # - pnpm, the version in package.json's packageManager field.
 FROM mwader/static-ffmpeg:9.0.2 AS ffmpeg
 FROM docker:29.8.0-cli AS docker-cli
@@ -27,5 +28,7 @@ COPY runner-init.sh /usr/local/bin/blinq-e2e-runner-init
 
 # Every process in the runner (Firefox, Chromium, pactl) finds the PulseAudio server through this socket.
 ENV PULSE_SERVER=unix:/run/blinq-pulse/native
+# The Xvfb display of runner-init.sh: headless Firefox needs an X display for WebGL (background blur).
+ENV DISPLAY=:99
 
 CMD ["sh", "/usr/local/bin/blinq-e2e-runner-init"]

@@ -11,9 +11,14 @@ import { dashboardWithRoom, joinLink } from './support'
 // livekit-client's devicechange listener held every Room, and @tanstack/vue-form's devtools listeners held each
 // RenameDialog and with it the CallSession. Chromium only (CDP heap usage after a forced GC).
 
-const CYCLES = 10
-/** Cycles before the first measurement: lazy chunks, the E2EE worker and caches load once. */
-const WARM_UP = 2
+const CYCLES = 16
+/**
+ * Cycles before the first measurement: lazy chunks, the E2EE worker, caches, optimized code and the resource-timing
+ * buffer (250 entries, full after about 6 cycles) settle first. In the Docker runner the heap still grows by about
+ * 300 KB per cycle for the first 8 cycles, then by 50-90 KB (22-cycle probe: 12.3 MB after cycle 1, 14.9 after cycle 8,
+ * 15.6 after cycle 19), so measuring from cycle 2 failed the limit without a leak.
+ */
+const WARM_UP = 9
 /** Average growth allowed per measured cycle (decision): a leaked call costs well over 1 MB. */
 const MAX_GROWTH_PER_CYCLE = 250 * 1024
 
@@ -37,7 +42,7 @@ const test = collabTest
 test.describe('resource hygiene', () => {
   test('the heap stays flat over join and leave cycles in one tab', async ({ page, context, rooms, collab }, info) => {
     test.skip(info.project.name !== 'chromium', 'CDP heap usage is Chromium only')
-    test.setTimeout(240_000)
+    test.setTimeout(420_000)
 
     const host = await rooms.createUser({ displayName: 'Hana Host' })
     const room = await rooms.createRoom(host, { name: 'Heap check', waitingRoom: false })

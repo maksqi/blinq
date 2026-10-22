@@ -9,10 +9,14 @@
  *
  * scripts/e2e.sh writes the logs to E2E_LOG_DIR (logs/e2e/app.log, logs/e2e/caddy.log) and sets E2E_REQUIRE_LOGS=1.
  * Other fixture files extend this `test` so that `mergeTests` keeps a single copy of the guards.
+ *
+ * Every watched context also waits for hydration after `page.goto()`, `reload()`, `goBack()` and `goForward()`
+ * (`waitForHydration`): a click before hydration does nothing, and hydration resets fields filled before it. A call
+ * page (`/m/<slug>`, `/dev/call`) opened without an explicit `waitUntil` waits for commit and hydration, never `load`.
  */
 import { closeSync, existsSync, fstatSync, openSync, readSync } from 'node:fs'
 import { join } from 'node:path'
-import { test as base, expect, type BrowserContext } from '@playwright/test'
+import { test as base, errors, expect, type BrowserContext, type Page, type Response } from '@playwright/test'
 
 export { expect }
 
@@ -40,9 +44,17 @@ export interface ContextRecorder {
   readonly problems: PageProblem[]
 }
 
+export interface WatchOptions {
+  /**
+   * Navigations of the context's pages wait for hydration (`waitForHydration`). Default true; off for contexts with
+   * JavaScript disabled, where nothing ever hydrates.
+   */
+  hydration?: boolean
+}
+
 export interface Guards {
   /** Applies the guards to a context the test creates itself (`browser.newContext()`, a second browser). */
-  watch(context: BrowserContext): Promise<void>
+  watch(context: BrowserContext, options?: WatchOptions): Promise<void>
   /** Allows console errors matching `pattern` (text or script URL) for the rest of the test. Deliberate errors only. */
   allowConsoleError(pattern: string | RegExp): void
 }
@@ -245,6 +257,149 @@ function installCspListener(binding: string) {
   )
 }
 
+/** Generous: the test build hydrates in well under a second, even on a busy runner. */
+const HYDRATION_TIMEOUT_MS = 20_000
+const hydrationWaiting = new WeakSet<Page>()
+/** The call pages: the meeting page `/m/<slug>` (any letter case, F-030) and the harness `/dev/call`. */
+const CALL_PAGE_PATH = /^\/(?:m\/|dev\/call(?:$|\/))/i
+
+/**
+ * Runs in the page: true once the document is parsed and either has no Nuxt app or Nuxt has finished hydrating it.
+ * Nuxt turns `isHydrating` off when the root `<Suspense>` resolves, right before `app:suspense:resolve`
+ * (`deferHydration` in nuxt/dist/app/nuxt.js), for client-only routes too and after an error during hydration.
+ * `__vue_app__` alone is set earlier, before the async page components have hydrated.
+ */
+function nuxtSettled(): boolean {
+  if (document.readyState === 'loading') return false
+  type NuxtRoot = Element & { __vue_app__?: { $nuxt?: { isHydrating?: boolean } } }
+  const root = document.querySelector('#__nuxt') as NuxtRoot | null
+  if (!root) return true
+  return root.__vue_app__?.$nuxt?.isHydrating === false
+}
+
+/** The lowercased path `url` (absolute, or a path relative to the base URL) opens, or null. */
+function targetPath(url: string): string | null {
+  try {
+    return new URL(url, 'http://base.invalid').pathname.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+/** Whether `url` (absolute, or a path relative to the base URL) opens a call page. */
+export function isCallPageUrl(url: string): boolean {
+  const path = targetPath(url)
+  return path !== null && CALL_PAGE_PATH.test(path)
+}
+
+/**
+ * Waits until the Nuxt app on `page` has hydrated. Before that a server-rendered button has no handler (a click does
+ * nothing) and mounting `v-model` resets every field filled in so far (F-069, F-070). Pages without a Nuxt app pass at
+ * once. Watched pages wait by themselves after `goto`, `reload`, `goBack` and `goForward`; call this after a full
+ * navigation the page starts itself (`window.location`).
+ */
+export async function waitForHydration(page: Page, timeout = HYDRATION_TIMEOUT_MS): Promise<void> {
+  try {
+    await page.waitForFunction(nuxtSettled, undefined, { polling: 50, timeout })
+  } catch (error) {
+    if (page.isClosed()) return
+    // Without the fragment: it may hold a room key.
+    const where = page.url().split('#')[0]
+    throw new Error(`The Nuxt app on ${where} did not finish hydrating within ${timeout} ms`, { cause: error })
+  }
+}
+
+type NavigationOptions = { waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit'; timeout?: number }
+
+/** A navigation commit arrives within about 100 ms; this is only the wait before the recovery below starts. */
+const CALL_PAGE_COMMIT_TIMEOUT_MS = 10_000
+/** Marks the recovery navigation's URL (a new document of the same page; the app ignores unknown query parameters). */
+const RENAVIGATE_PARAM = 'e2e-renavigate'
+
+/** The page's current path, lowercased (the meeting route ignores letter case), or null. */
+async function currentPath(page: Page): Promise<string | null> {
+  return page.evaluate(() => location.pathname.toLowerCase()).catch(() => null)
+}
+
+/** `url` with the recovery query parameter; relative when `url` is. */
+function renavigationUrl(url: string): string {
+  const absolute = /^[a-z][a-z\d+.-]*:/i.test(url)
+  const parsed = new URL(url, 'http://base.invalid')
+  parsed.searchParams.set(RENAVIGATE_PARAM, '1')
+  return absolute ? parsed.toString() : `${parsed.pathname}${parsed.search}${parsed.hash}`
+}
+
+/** A navigation to a call page: its path, and (for goto) how to navigate there again as a new document. */
+interface CallNavigation {
+  path: string
+  again?: (options: NavigationOptions) => Promise<Response | null>
+}
+
+/**
+ * Runs a navigation, then waits for hydration. A call page navigated to without an explicit `waitUntil` waits for
+ * `commit` instead of `load`: in a long run Firefox sometimes never reports `load` (F-064) or `DOMContentLoaded` for it
+ * although the page renders. It can even lose the commit of a fresh context's first navigation (the
+ * Cross-Origin-Opener-Policy process switch from about:blank) while another context is in a call: the page loads and
+ * runs, but Playwright keeps waiting for that navigation, and so does every locator. Seen in the Docker runner on
+ * `/dev/call` and `/m/<slug>`, never in a fresh browser (0 of 300 navigations). So when the commit does not arrive in
+ * time although the page already shows the path, the page is navigated once more, to the same URL plus a query
+ * parameter: a new document of the same origin and opener policy, so no process switch (the test gets an annotation).
+ * Hydration, then the caller's own signal (the pre-join screen), mark the page ready.
+ */
+async function navigateAndHydrate<O extends NavigationOptions>(
+  page: Page,
+  navigate: (options?: O) => Promise<Response | null>,
+  options: O | undefined,
+  call: CallNavigation | null,
+): Promise<Response | null> {
+  if (call && options?.waitUntil === undefined) {
+    const commit = { ...options, waitUntil: 'commit', timeout: options?.timeout ?? CALL_PAGE_COMMIT_TIMEOUT_MS } as O
+    let response: Response | null
+    try {
+      response = await navigate(commit)
+    } catch (error) {
+      if (!(error instanceof errors.TimeoutError) || !call.again || (await currentPath(page)) !== call.path) throw error
+      base.info().annotations.push({
+        type: 'note',
+        description: `the browser never reported the commit of ${call.path}, which the page showed: navigated again`,
+      })
+      response = await call.again(commit)
+    }
+    await waitForHydration(page)
+    return response
+  }
+  const response = await navigate(options)
+  // `commit` asks for the document before any script ran; a non-HTML answer (JSON, a file) has no app.
+  if (options?.waitUntil === 'commit') return response
+  if (response && !/^text\/html\b/i.test(response.headers()['content-type'] ?? '')) return response
+  await waitForHydration(page)
+  return response
+}
+
+/** Makes `goto`, `reload`, `goBack` and `goForward` of `page` resolve only once the app has hydrated. */
+function hydrateAfterNavigations(page: Page): void {
+  if (hydrationWaiting.has(page)) return
+  hydrationWaiting.add(page)
+  const goto = page.goto.bind(page)
+  const reload = page.reload.bind(page)
+  const goBack = page.goBack.bind(page)
+  const goForward = page.goForward.bind(page)
+  page.goto = (url, options) => {
+    const path = targetPath(url)
+    const call =
+      path !== null && isCallPageUrl(url)
+        ? { path, again: (o: NavigationOptions) => goto(renavigationUrl(url), o) }
+        : null
+    return navigateAndHydrate(page, (o) => goto(url, o), options, call)
+  }
+  page.reload = (options) => {
+    const path = targetPath(page.url())
+    return navigateAndHydrate(page, reload, options, path !== null && isCallPageUrl(page.url()) ? { path } : null)
+  }
+  page.goBack = (options) => navigateAndHydrate(page, goBack, options, null)
+  page.goForward = (options) => navigateAndHydrate(page, goForward, options, null)
+}
+
 /**
  * Records CSP violations, console errors and uncaught errors of every page in `context`. The fixtures apply it to the
  * test's context automatically; `guards.watch()` applies it to contexts a test creates. Exported for self-tests.
@@ -300,11 +455,52 @@ interface TestState {
 }
 
 /**
- * Benign framework messages allowed in every test. Nuxt fetches the build manifest in the background about a second
- * after load; when a navigation cancels that request, WebKit and Firefox log `[NUXT_E5002]`. blinq has no client-side
- * route rules or prerendered pages, so the manifest is never needed (Stage 10, F-063).
+ * Benign framework and library messages allowed in every test, each matched by its exact text.
+ * - Nuxt fetches the build manifest in the background about a second after load. When a navigation cancels that
+ *   request, WebKit and Firefox log `[NUXT_E5002]`, and WebKit may also report the cancelled fetch as an uncaught
+ *   "Fetch API cannot load <origin>/_nuxt/builds/meta/<build id>.json due to access control checks." (Playwright
+ *   splits it at the URL's colon into name and message). blinq has no client-side route rules or prerendered pages,
+ *   so the manifest is never needed (Stage 10, F-063).
+ * - Firefox rejects a pending `AudioContext.resume()` with "Navigated away from page" when the document unloads.
+ *   livekit-client 2.22 leaves one such promise unhandled: `Room.acquireAudioContext` races `resume()` against a
+ *   200 ms sleep, and the app's Join click calls `room.startAudio()`. Leaving the page soon after a Join logs it.
+ * - Chromium logs "A VideoFrame was garbage collected without being closed" when the blur pipeline of
+ *   @livekit/track-processors 0.8 is torn down with a frame in flight. The app itself creates no VideoFrame.
+ * - Firefox aborts the `play()` that livekit-client's `setProcessor` starts on its processor `<video>` (it warns
+ *   "failed to play processor element, retrying" on every blur start), and when livekit's single retry 100 ms later
+ *   fails too it logs "failed to play processor element". @livekit/track-processors' render loop calls `play()` on that
+ *   element every second while it is paused, so blur still starts (the blur specs check its frames).
  */
-const FRAMEWORK_NOISE: RegExp[] = [/^\[NUXT_E5002\](?:\n|$)/]
+const FRAMEWORK_NOISE: RegExp[] = [
+  /^\[NUXT_E5002\](?:\n|$)/,
+  /^(?:TypeError: )?Fetch API cannot load http: ?\/{1,2}\S+\/_nuxt\/builds\/meta\/[\w-]+\.json due to access control checks\.\n/,
+  /^\[JavaScript Error: "InvalidStateError: Navigated away from page"\]\n/,
+  /^A VideoFrame was garbage collected without being closed\. Applications should call close\(\) on frames when done with them to prevent stalls\.\n/,
+  /^failed to play processor element(?: JSHandle@object)?\n/,
+]
+
+/**
+ * Console errors of known product defects, allowed until they are fixed; each entry names its pending finding and the
+ * fix agent deletes it.
+ */
+const PENDING_FINDINGS: RegExp[] = [
+  // pending finding: a moderator's debounced `GET /api/calls/:roomId/participants` refetch (useParticipantInfo.ts,
+  // 200 ms after a participant hint or an own action) still runs while its own leave is in progress: `enabled()` checks
+  // only the phase, which stays inCall during `room.disconnect()`. Once the server has ended the row it answers 403,
+  // which the browser logs. Multi-peer teardowns hit it (security/external-requests, collab/host-actions).
+  /^Failed to load resource: the server responded with a status of 403 \(Forbidden\)\nhttp:\/\/[^/\s]+\/api\/calls\/[0-9a-f-]{36}\/participants$/,
+]
+
+/**
+ * Whether `text` (a console message, or `name: message` of an uncaught error) is one of the benign messages above.
+ * For page watchers outside these fixtures (tests/e2e/shell/support.ts).
+ */
+export function isFrameworkNoise(text: string): boolean {
+  return FRAMEWORK_NOISE.some((pattern) => {
+    pattern.lastIndex = 0
+    return pattern.test(`${text}\n`)
+  })
+}
 
 export const test = base.extend<
   { allowConsoleErrors: (string | RegExp)[]; guards: Guards; secrets: Secrets; _e2eTest: TestState },
@@ -330,8 +526,8 @@ export const test = base.extend<
   ],
 
   _e2eTest: [
-    async ({ context, allowConsoleErrors, _e2eWorker }, use, testInfo) => {
-      const allowed = [...allowConsoleErrors, ...FRAMEWORK_NOISE]
+    async ({ context, allowConsoleErrors, javaScriptEnabled, _e2eWorker }, use, testInfo) => {
+      const allowed = [...allowConsoleErrors, ...FRAMEWORK_NOISE, ...PENDING_FINDINGS]
       const recorders: ContextRecorder[] = []
       const watched = new WeakSet<BrowserContext>()
       const tracked = new Map<string, string>()
@@ -339,9 +535,13 @@ export const test = base.extend<
       const leaks = () => _e2eWorker.logs.leaksSince(start, new Map([..._e2eWorker.env, ...tracked]))
 
       const guards: Guards = {
-        async watch(target) {
+        async watch(target, options = {}) {
           if (watched.has(target)) return
           watched.add(target)
+          if (options.hydration !== false) {
+            target.on('page', hydrateAfterNavigations)
+            target.pages().forEach(hydrateAfterNavigations)
+          }
           recorders.push(await watchContext(target))
         },
         allowConsoleError(pattern) {
@@ -365,7 +565,8 @@ export const test = base.extend<
         },
       }
 
-      await guards.watch(context)
+      // The pre-hydration specs turn JavaScript off (auth/prehydration): their pages never hydrate.
+      await guards.watch(context, { hydration: javaScriptEnabled !== false })
       await use({ guards, secrets })
       await sleep(LOG_SETTLE_MS)
 

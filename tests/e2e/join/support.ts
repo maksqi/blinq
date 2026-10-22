@@ -110,11 +110,12 @@ export function joinFlow(page: Page) {
 
 /**
  * Opens a meeting link and waits for the pre-join screen (books the info and the join request). The pre-join screen is
- * the readiness signal, not the `load` event: Firefox sometimes never fires `load` on a fully rendered pre-join.
+ * the readiness signal, not the `load` event: Firefox sometimes never reports `load` (or `DOMContentLoaded`) on a fully
+ * rendered pre-join, so a watched page's goto waits for commit and hydration on call pages (fixtures/base.ts).
  */
 export async function openToPrejoin(page: Page, link: string, joinRequests = 2): Promise<void> {
   await spendJoinBudget(joinRequests)
-  await page.goto(link, { waitUntil: 'domcontentloaded' })
+  await page.goto(link)
   await expect(page.getByTestId('prejoin')).toBeVisible({ timeout: 20_000 })
 }
 
