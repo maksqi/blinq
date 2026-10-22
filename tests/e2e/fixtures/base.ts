@@ -16,7 +16,7 @@
  */
 import { closeSync, existsSync, fstatSync, openSync, readSync } from 'node:fs'
 import { join } from 'node:path'
-import { test as base, expect, type BrowserContext, type Page, type Response } from '@playwright/test'
+import { test as base, errors, expect, type BrowserContext, type Page, type Response } from '@playwright/test'
 
 export { expect }
 
@@ -277,13 +277,19 @@ function nuxtSettled(): boolean {
   return root.__vue_app__?.$nuxt?.isHydrating === false
 }
 
+/** The lowercased path `url` (absolute, or a path relative to the base URL) opens, or null. */
+function targetPath(url: string): string | null {
+  try {
+    return new URL(url, 'http://base.invalid').pathname.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
 /** Whether `url` (absolute, or a path relative to the base URL) opens a call page. */
 export function isCallPageUrl(url: string): boolean {
-  try {
-    return CALL_PAGE_PATH.test(new URL(url, 'http://base.invalid').pathname)
-  } catch {
-    return false
-  }
+  const path = targetPath(url)
+  return path !== null && CALL_PAGE_PATH.test(path)
 }
 
 /**
@@ -303,22 +309,50 @@ export async function waitForHydration(page: Page, timeout = HYDRATION_TIMEOUT_M
   }
 }
 
-type NavigationOptions = { waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit' }
+type NavigationOptions = { waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit'; timeout?: number }
+
+/** A navigation commit arrives within about 100 ms; this is only the wait before the fallback below kicks in. */
+const CALL_PAGE_COMMIT_TIMEOUT_MS = 15_000
+
+/** The page's current path, lowercased (the meeting route ignores letter case), or null. */
+async function currentPath(page: Page): Promise<string | null> {
+  return page.evaluate(() => location.pathname.toLowerCase()).catch(() => null)
+}
 
 /**
  * Runs a navigation, then waits for hydration. A call page navigated to without an explicit `waitUntil` waits for
- * `commit` instead of `load`: in a long run Firefox sometimes never reports `load` (F-064) or even `DOMContentLoaded`
- * for it although the page renders (seen in the Docker runner on `/dev/call` and `/m/<slug>`, never in a fresh
- * browser). Hydration, then the caller's own signal (the pre-join screen), mark it ready.
+ * `commit` instead of `load`: in a long run Firefox sometimes never reports `load` (F-064) or `DOMContentLoaded` for it
+ * although the page renders. It may even lose the commit of a fresh context's first navigation (the
+ * Cross-Origin-Opener-Policy process switch from about:blank) while another context is in a call: the page loads and
+ * runs, Playwright never resolves. Seen in the Docker runner on `/dev/call` and `/m/<slug>`, never in a fresh browser
+ * (0 of 300 navigations). So when the commit does not arrive in time but the page already shows `callPath`, the
+ * navigation counts as done (with an annotation). Hydration, then the caller's own signal (the pre-join screen), mark
+ * the page ready.
  */
 async function navigateAndHydrate<O extends NavigationOptions>(
   page: Page,
   navigate: (options?: O) => Promise<Response | null>,
   options: O | undefined,
   callPage: boolean,
+  callPath: string | null = null,
 ): Promise<Response | null> {
   if (callPage && options?.waitUntil === undefined) {
-    const response = await navigate({ ...options, waitUntil: 'commit' } as O)
+    let response: Response | null = null
+    try {
+      response = await navigate({
+        ...options,
+        waitUntil: 'commit',
+        timeout: options?.timeout ?? CALL_PAGE_COMMIT_TIMEOUT_MS,
+      } as O)
+    } catch (error) {
+      if (!(error instanceof errors.TimeoutError) || callPath === null || (await currentPath(page)) !== callPath) {
+        throw error
+      }
+      base.info().annotations.push({
+        type: 'note',
+        description: `the browser never reported the commit of ${callPath}, which the page shows: the test goes on`,
+      })
+    }
     await waitForHydration(page)
     return response
   }
@@ -338,7 +372,8 @@ function hydrateAfterNavigations(page: Page): void {
   const reload = page.reload.bind(page)
   const goBack = page.goBack.bind(page)
   const goForward = page.goForward.bind(page)
-  page.goto = (url, options) => navigateAndHydrate(page, (o) => goto(url, o), options, isCallPageUrl(url))
+  page.goto = (url, options) =>
+    navigateAndHydrate(page, (o) => goto(url, o), options, isCallPageUrl(url), targetPath(url))
   page.reload = (options) => navigateAndHydrate(page, reload, options, isCallPageUrl(page.url()))
   page.goBack = (options) => navigateAndHydrate(page, goBack, options, false)
   page.goForward = (options) => navigateAndHydrate(page, goForward, options, false)
