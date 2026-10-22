@@ -1,6 +1,7 @@
 import { createError, H3Error } from 'h3'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { errorMessage } from '#shared/utils/error-codes'
 import { apiError } from './api-error'
 import { apiErrorResponse, isZodLikeError, normalizeApiError, toValidationIssues } from './validation'
 
@@ -80,7 +81,7 @@ describe('normalizeApiError', () => {
     normalizeApiError(notFound)
     const response = apiErrorResponse(notFound)
     expect(response.status).toBe(404)
-    expect(response.body).toEqual({ statusCode: 404, statusMessage: 'Not found.', data: { code: 'NOT_FOUND' } })
+    expect(response.body).toEqual({ statusCode: 404, statusMessage: errorMessage('NOT_FOUND'), data: { code: 'NOT_FOUND' } })
     expect(JSON.stringify(response.body)).not.toContain('/api/x')
     expect(response.headers).toMatchObject({
       'Content-Type': 'application/json; charset=utf-8',
