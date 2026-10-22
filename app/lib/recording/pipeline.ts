@@ -15,6 +15,7 @@
  */
 import { RoomEvent, Track, type Room, type TrackPublication } from 'livekit-client'
 import type { CallContext, VideoDemand } from '../contracts/call'
+import { receiverReady } from '../livekit/receiver-guard'
 import type { FrameClock } from './clock'
 import { Compositor, type SceneTile } from './compositor'
 import { AUDIO_BITRATE, canvasSizeFor, VIDEO_BITRATES, type RecordingLayout, type RecordingResolution } from './layout'
@@ -87,7 +88,8 @@ function remoteFacts(ctx: CallContext, room: Room): RemotePublicationFacts<Media
         encrypted: publication.isEncrypted && !blocked.has(participant.identity),
         subscribed: publication.isSubscribed,
         muted: publication.isMuted,
-        track: publication.track?.mediaStreamTrack ?? null,
+        // Only a track whose decrypting receiver call-core accepted is drawn (F-067, receiver-guard.ts).
+        track: receiverReady(publication.track) ? publication.track!.mediaStreamTrack : null,
       })
     }
   }

@@ -235,6 +235,10 @@ don't overload the machine.
   - livekit-client 2.22.3 sends encrypted data packets without `encryption_type`, so receivers saw NONE.
     `patches/livekit-client@2.22.3.patch` (pnpm `patchedDependencies`) sets it; `app/lib/livekit/sdk-patch.test.ts`
     fails when an upgrade drops the patch. Re-check the upstream fix on every livekit-client upgrade.
+  - In 2.22.3 a full reconnect emits `Reconnected` about 2 s before the engine's attempt ends, and every
+    `emitWhenConnected` event in that window (`TrackSubscribed` included) was lost, so no E2EE receiver was set up.
+    Patched (F-067); blinq also uses a remote track only after its own `TrackSubscribed` handler saw a decrypting
+    receiver (`app/lib/livekit/receiver-guard.ts`). Re-check on every upgrade.
 - `autoSubscribe: false` + SubscriptionManager. Only subscribe to publications with encryption ≠ NONE.
 - Server-originated data arrives with no participant. So do packets from unknown or hidden participants, so
   "no sender" is **not** proof of server origin: treat `blinq.srv.v1` as a refetch hint only.

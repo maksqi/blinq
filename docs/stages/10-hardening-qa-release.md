@@ -304,7 +304,7 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
 - [x] F-066 [low] infra — Caddy's default zstd level is ~3 % larger than gzip-5 and the `.tflite` model is served
       uncompressed — owner: orchestrator — status: accepted (the budget is measured with the production encoder; the
       model is 244 KB of mostly incompressible weights, loaded only when blur is turned on)
-- [ ] F-067 [high] call — after a LiveKit full reconnect (now taken back by F-039) Chromium keeps receiving the peer's
+- [x] F-067 [high] call — after a LiveKit full reconnect (now taken back by F-039) Chromium keeps receiving the peer's
       packets but decodes no frames (`framesDecoded` 0, no blocked or undecryptable state, no notice); the console shows
       `Could not unset participant on cryptor` for the peer's tracks. livekit-client 2.22.3 uses `createEncodedStreams`
       on Chromium (cryptor state per track id); Firefox recovers. `call/reconnect` keeps it as `fixme` for `chromium`
@@ -312,7 +312,10 @@ Format: `- [ ] F-NNN [severity] <area> — <summary> — owner: <agent> — stat
       `RTCEngine` keeps `pendingReconnect` true until the whole attempt settles, but the Room emits `Reconnected` about
       2 s earlier, so every `emitWhenConnected` event of that window (the new `TrackSubscribed` included) is buffered and
       never flushed: no E2EE receiver transform, no audio element. Firefox and Safari can lose the same race and then
-      decode without a transform (fails open, F-015) — owner: fix-call — status: open
+      decode without a transform (fails open, F-015) — owner: fix-call — status: fixed (fix-call 5e82605: the reconnect
+      timer no longer outlives its attempt; 9605486: only receivers with a decrypting transform are used, the recording
+      compositor included, and a receiver watchdog reports the rest; `call/reconnect` both ways on chromium and
+      firefox, 12/12 with `--repeat-each=3` in the Docker runner)
 - [ ] F-068 [low] e2e — `perf/budget` counted 16 preloaded files twice (Chromium lists the `link` preload and the
       `script` entry, the second from the HTTP cache), so the call route summed to 477.9 KiB and was skipped as
       "pending F-043"; counted once it is 438.9 KiB (docs) — owner: orchestrator — status: open

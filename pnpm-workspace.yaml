@@ -18,7 +18,7 @@ allowBuilds:
 # Local dependency patches (pnpm patch). Each one says why in the patch file; drop it once upstream ships the fix.
 # livekit-client: set encryption_type on encrypted data packets, so receivers can require E2EE for chat (2.22.3 bug);
 #   never pass undecrypted frames through the E2EE worker; no Room kept alive by document/mediaDevices listeners; no
-#   data channel errors logged for a server-side close.
+#   data channel errors logged for a server-side close; no events lost after a full reconnect (F-067).
 # @tanstack/vue-form: run mount()'s cleanup on unmount, so form devtools listeners don't keep components alive.
 patchedDependencies:
   '@tanstack/vue-form@1.33.5': patches/@tanstack__vue-form@1.33.5.patch

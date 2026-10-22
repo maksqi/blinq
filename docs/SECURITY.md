@@ -79,6 +79,9 @@ All derivations use HKDF-SHA256 via WebCrypto. The exact info strings are in [`A
     participant, so a forged `NONE` publication could otherwise turn decryption off for their encrypted tracks.
   - The patched E2EE worker (`patches/livekit-client@2.22.3.patch`) drops frames it cannot decrypt instead of passing
     them to the decoder, and never sends a frame unencrypted.
+  - A remote track is attached, played, mixed or recorded only after blinq's `TrackSubscribed` handler saw its
+    decrypting receiver; a subscribed track that does not decrypt (no receiver transform, or packets but no decoded
+    frames for 5 s) is reported like undecryptable media (F-067).
   - The E2EE badge means "all remote media in this call is encrypted", not merely "my encryption is on".
 - **Codecs:** VP8 simulcast. AV1, backup codecs and Opus RED are disabled (not supported under E2EE). Safari
   earlier than 17.2 publishes without simulcast.
