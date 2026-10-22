@@ -24,13 +24,31 @@ patchedDependencies:
   '@tanstack/vue-form@1.33.5': patches/@tanstack__vue-form@1.33.5.patch
   livekit-client@2.22.3: patches/livekit-client@2.22.3.patch
 
+# Security updates of transitive packages, until the packages that pull them in require the fixed versions
+# (2026-10-22, pnpm audit; drop an entry once the lockfile resolves to a fixed version without it).
+overrides:
+  # GHSA-68fv-2mgg-jv7q (indexed source maps), via @vue/compiler-core; traced into .output, never fed untrusted maps.
+  source-map-js: ^1.2.2
+  # GHSA-587h-7wmj-h5pm (build tool, dev server), via nuxt and @nuxt/vite-builder.
+  vite: 8.3.4
+  # GHSA-587h-7wmj-h5pm and GHSA-pqg4-j6r4-53mv, via @nuxt/devtools (dev server only).
+  launch-editor: ^2.14.2
+  shell-quote: ^1.12.0
+
 # Audit exceptions (`pnpm audit`, ci.yml and release.yml). Only for build-time packages that never reach the runtime
 # bundle (.output) and have no patched release yet; re-check on every dependency update and drop when a fix ships.
 auditConfig:
   ignoreGhsas:
     # node-forge <=1.4.0 (RSA PKCS#1 v1.5 signatures), via nuxt > @nuxt/cli and nitropack > listhen: dev-server HTTPS
-    # certificates only. No 1.4.1 on npm yet (2026-10-03).
+    # certificates only. No 1.4.1 on npm yet (2026-10-22).
     - GHSA-86w9-cpqp-85rv
     # braces <=3.0.3 (stack exhaustion on crafted patterns), via nitropack > globby > micromatch: build-time globs over
-    # our own files. No 3.0.4 on npm yet (2026-10-03).
+    # our own files. No 3.0.4 on npm yet (2026-10-22).
     - GHSA-vfj7-8cjw-p6xm
+    # simple-git <=3.36.0 and @simple-git/argv-parser <2.0.1 (git command and config injection through crafted
+    # arguments), via @nuxt/devtools: the dev server's devtools only, never in the build output or the image. The fixes
+    # are simple-git 4, which @nuxt/devtools 3 (^3.36.0) does not accept yet (2026-10-22).
+    - GHSA-v5rq-49vh-5v5c
+    - GHSA-x6jw-m9v5-85vh
+    - GHSA-g4wm-2vf7-vfgr
+    - GHSA-858h-whjf-mvg5
