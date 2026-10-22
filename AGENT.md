@@ -117,7 +117,7 @@ it centrally.
 | `pnpm test` | Vitest unit tests |
 | `pnpm test:api` | API integration tests (builds the server once in globalSetup) |
 | `pnpm build` / `pnpm build:test` | production build / test build with `BLINQ_TEST_HOOKS=1` |
-| `pnpm test:e2e` | Playwright (needs the dev stack and a test build) |
+| `pnpm test:e2e` | Playwright through `scripts/e2e.sh`: inside the Docker runner on macOS (never host browsers there) |
 | `pnpm check:english` | fails on Cyrillic in tracked files |
 | `pnpm db:migrate` | apply migrations (`pnpm cli migrate`) |
 | `pnpm cli <cmd>` | `migrate`, `bootstrap`, `reset-password <email>` (password via stdin) |

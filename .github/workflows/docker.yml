@@ -30,6 +30,7 @@ jobs:
           LIVEKIT_NODE_IP=127.0.0.1 docker compose -f docker-compose.dev.yml config --quiet
           docker compose -f docker/e2e/compose.yml config --quiet
           COMPOSE_PROFILES=linux docker compose -f docker/e2e/compose.yml config --quiet
+          E2E_ROOT=/tmp/x E2E_VOLUME_PREFIX=ci docker compose -f docker/e2e/runner.compose.yml config --quiet
       - name: Production compose file (TURN on and off, a missing secret)
         # Interpolation only, with the documented placeholders of .env.example; nothing starts.
         run: |

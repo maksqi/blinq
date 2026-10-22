@@ -5,7 +5,7 @@ agents from breaking each other's runs. Tools: Vitest 5 with `@nuxt/test-utils` 
 security properties the tests must prove are listed in [`SECURITY.md` §10](SECURITY.md#10-verification). Every stage
 file names the test or command that proves each DoD item.
 
-Owner: `devops-ci` from W0b on. `TODO(devops-ci)` marks details that are filled in as the harness is built.
+Owner: `devops-ci` from W0b on; the orchestrator after Wave 3.
 `(decision)` marks a choice this document makes where the plan left it open.
 
 ## 1. Test pyramid
@@ -31,10 +31,11 @@ Owner: `devops-ci` from W0b on. `TODO(devops-ci)` marks details that are filled 
 | `pnpm exec vitest run --project nuxt` | Nuxt-environment component tests (no package script yet) |
 | `sh scripts/with-lock.sh pnpm test:api` | API tests; the global setup builds the test server first |
 | `sh scripts/with-lock.sh pnpm build:test` | the test build (`BLINQ_TEST_HOOKS=1`) that E2E runs against |
-| `sh scripts/with-lock.sh pnpm test:e2e` | Playwright, all projects (needs the setup in §6.2) |
-| `pnpm test:e2e --project=firefox call/e2ee` | one project, spec paths matching `call/e2ee`; add `--debug` for a headed, stepping run |
+| `pnpm test:e2e` | `sh scripts/e2e.sh`: on macOS the Docker runner (§6.2), on Linux and in CI the host mode; takes the lock itself |
+| `pnpm test:e2e --project=firefox call/e2ee` | one project, spec paths matching `call/e2ee` (arguments go to Playwright) |
+| `pnpm test:e2e:docker` | the Docker runner directly, on any OS (`sh scripts/e2e-docker.sh`) |
 | `pnpm exec playwright show-report` | the last HTML report; `pnpm exec playwright show-trace <zip>` opens a failure trace |
-| `pnpm exec playwright install chromium firefox webkit` | once per machine (the nightly Edge job also installs `msedge`) |
+| `pnpm exec playwright install chromium firefox webkit` | host mode only (Linux, CI, `E2E_HOST=1`); the Docker runner brings its browsers |
 | `pnpm check:english` | fails on any Cyrillic character in tracked and new files |
 
 Arguments: pnpm 11 forwards everything after the script name, including a literal `--`.
@@ -90,9 +91,10 @@ tests/fixtures/media/                          reference and malicious media fil
 All files share one server, limiter store and settings cache. So API files run one at a time (single fork,
 `fileParallelism: false`), and tests that change admin settings restore them in `afterEach`.
 
-Helpers next to it (exact names: TODO(server-core)): an HTTP client with a cookie jar and `api.as(user)`; factories
-(`createUser`, `createAdmin`, `createSession`, `createRoom`, `createRoomInvite`, `createMeeting`,
-`createParticipant`); a Mailpit client; `signWebhook()`; `uniqueIp()`.
+Helpers next to it (`tests/api/_harness/index.ts`): `createClient()` (an `ApiClient` with a cookie jar and its own
+`X-Forwarded-For` from `uniqueIp()`), `expectApiError()`; factories (`createUser`, `createAdmin`, `createSession`,
+`loginAs`, `createRoom`, `createRoomInvite`, `createInvite`, `createMeeting`, `createGuestSession`,
+`createParticipant`); a Mailpit client (`waitForMessage`, `expectNoMessage`, `extractFragmentToken`); `signWebhook()`.
 
 ### 5.2 Rules
 
@@ -154,8 +156,28 @@ and a replayed event id (must be deduplicated).
 
 ### 6.1 What E2E runs against
 
+Both modes run the same flow (`scripts/e2e.sh`): a test build behind the e2e Caddy (`docker/e2e/Caddyfile`), with app
+and LiveKit signaling on one origin.
+
+**Docker runner** (`scripts/e2e-docker.sh`; the only local mode, §6.2). Every service shares the runner container's
+network namespace (`docker/e2e/runner.compose.yml`), and no port is published on the host:
+
 ```
-Playwright ─► e2e Caddy (E2E_BASE_URL, default http://localhost:8080; docker/e2e/Caddyfile)
+runner container: Playwright browsers, the fixtures, the test build (node .output/server/index.mjs)
+  + in its network namespace: Caddy :8080, LiveKit :7880/:7881/:7882, Postgres :55432, Mailpit :1025/:8025
+Playwright ─► Caddy http://localhost:8080 (E2E_BASE_URL)
+                ├─ /rtc*            ─► LiveKit 127.0.0.1:7880 (signaling)
+                ├─ /api/webhooks/*  ─► 404 (LiveKit calls the app directly)
+                └─ everything else  ─► the test build on 127.0.0.1:3000
+Browsers ══ media: the runner's eth0 address, UDP 7882 / TCP 7881 ══► LiveKit
+LiveKit ─ webhooks ─► http://127.0.0.1:3000/api/webhooks/livekit
+Fixtures ─► the app on 127.0.0.1:3000, Postgres 127.0.0.1:55432, Mailpit 127.0.0.1:8025, LiveKit 127.0.0.1:7880
+```
+
+**Host mode** (Linux and CI, or `E2E_HOST=1`): browsers on the host, the shared dev stack, the app on your port.
+
+```
+Playwright ─► e2e Caddy (E2E_BASE_URL, default http://localhost:8080; docker/e2e/compose.yml)
                 ├─ /rtc*            ─► dev LiveKit :7880 (signaling)
                 ├─ /api/webhooks/*  ─► 404 (LiveKit calls the app directly)
                 └─ everything else  ─► the test build on your PORT (node .output/server/index.mjs)
@@ -172,28 +194,96 @@ app on the host. It also makes LiveKit webhooks reach the app in CI.
 - App and signaling are same-origin, so the production CSP (`connect-src 'self'`) applies unchanged. The CSP additions
   for `localhost:7880` exist only in `nuxt dev`.
 - The app runs with `PUBLIC_URL` = `E2E_BASE_URL` and `LIVEKIT_PUBLIC_URL` = the same origin with `ws://`, so links,
-  cookies and CSRF checks use the Caddy origin.
-- LiveKit advertises the LAN IP because Firefox rejects loopback ICE candidates. E2E runs with 1 worker; every test
-  creates its own rooms.
-- All E2E traffic reaches the app from one IP (the Caddy container), so per-IP limits are a shared budget across a
-  whole run: for example `auth-ip` allows 10 attempts per minute. Keep failing-login specs few, or give them distinct
-  accounts and wait out windows instead of relying on retries.
+  cookies and CSRF checks use the Caddy origin. `http://localhost` is a secure context, so WebCrypto and E2EE work.
+- LiveKit advertises a non-loopback address because Firefox rejects loopback ICE candidates: the runner's eth0
+  address (detected when its LiveKit starts), or the LAN IP in host mode. E2E runs with 1 worker; every test creates
+  its own rooms.
+- All E2E traffic reaches the app from one IP (Caddy: loopback in the runner, the Caddy container in host mode), so
+  per-IP limits are a shared budget across a whole run: for example `auth-ip` allows 10 attempts per minute. Keep
+  failing-login specs few, or give them distinct accounts and wait out windows instead of relying on retries. Fixtures
+  that call the app directly on `127.0.0.1` come from loopback, so the app trusts their `X-Forwarded-For`
+  (`server/utils/client-ip.ts`) in both modes.
 
 ### 6.2 Running locally
 
-1. The shared dev stack is up (`pnpm dev:deps`, run by the orchestrator) and your worktree is set up (§7).
-2. Stop your `pnpm dev` server (the E2E server uses your port), then run:
-   `sh scripts/e2e.sh --project=chromium tests/e2e/<area>`
-   The script holds the machine-wide lock (`scripts/with-lock.sh`), builds the test build (`pnpm build:test`),
-   recreates and migrates the `blinq_e2e` database, starts `.output/server/index.mjs` with the E2E environment (§6.1),
-   starts the e2e Caddy (`docker/e2e/compose.yml`, project `blinq-e2e`), waits for health, runs Playwright with your
-   arguments, and stops everything on exit.
-   Variables: `E2E_SKIP_BUILD=1` reuses the last test build; `E2E_APP_PORT` overrides the app port;
-   `E2E_DB_NAME` overrides the database name; `E2E_HTTP_PORT` (default 8080) moves the e2e Caddy, and with it
-   `E2E_BASE_URL`, `PUBLIC_URL` and `LIVEKIT_PUBLIC_URL`, to another port when something else holds 8080.
+Every local Playwright run happens inside Docker (decision, 2026-10-22). Browsers on a Mac play the fake-media tone
+and remote audio through its speakers (Playwright mutes only headless Chromium), so never run `pnpm test:e2e`,
+`pnpm exec playwright test` or `E2E_HOST=1` on the maintainer's Mac. Lint, typecheck, Vitest, API tests and builds
+stay on the host.
 
-Artifacts: `test-results/` (trace, video and screenshot kept on failure), `playwright-report/`, and the logs in
-`logs/e2e/{app,caddy}.log` (`E2E_LOG_DIR` overrides the directory).
+```sh
+sh scripts/e2e-docker.sh --project=chromium tests/e2e/<area>
+# the PR selection of e2e.yml:
+sh scripts/e2e-docker.sh --project=chromium --project=firefox --project=webkit-ui --project=mobile-chromium \
+  --grep-invert @nightly
+```
+
+On macOS `sh scripts/e2e.sh …` is the same command: it hands over to `scripts/e2e-docker.sh`. Docker must be running;
+the shared dev stack and your `pnpm dev` server are not involved (the runner brings its own services and uses no host
+port). The script:
+1. holds the machine-wide lock (`scripts/with-lock.sh`) for the whole run;
+2. builds the runner image `docker/e2e/runner.Dockerfile` (build context `docker/e2e/` only): the Playwright 1.63.0
+   noble image pinned by digest (it must match `@playwright/test` in `pnpm-lock.yaml`), static ffmpeg/ffprobe 9 from
+   `mwader/static-ffmpeg:9.0.2`, psql, the docker CLI, PulseAudio and pnpm 11.20;
+3. starts `docker/e2e/runner.compose.yml` (project `blinq-e2e-docker`): the runner plus Caddy, LiveKit v1.13.7,
+   Postgres 18 (data on tmpfs) and Mailpit in its network namespace, and waits until all are healthy;
+4. runs `scripts/e2e.sh` in runner mode inside the runner: `pnpm install --frozen-lockfile` into the runner's
+   `node_modules` volume, `pnpm build:test`, a fresh `blinq_e2e` database over TCP, `migrate` and `bootstrap` with the
+   bundled CLI, the app on `127.0.0.1:3000` with the E2E environment, then `pnpm exec playwright test` with your
+   arguments;
+5. removes the containers on exit, also after a failure or Ctrl-C (the volumes stay). The exit code is Playwright's.
+
+The first run of a checkout installs and builds from scratch (a few minutes); later runs reuse the volumes.
+
+| Variable | Effect |
+|---|---|
+| `E2E_SKIP_BUILD=1` | reuses the test build in the `.output` volume; fails unless it is a Linux test build |
+| `E2E_DB_NAME` | the test database (default `blinq_e2e`) |
+| `E2E_LIVEKIT_SEND_SIDE_BWE=true` | starts the runner's LiveKit with `rtc.congestion_control.use_send_side_bwe` (A/B runs; default `false`) |
+| `E2E_BUILD_HEAP_MB` | Node heap for the build in the runner (default 4096; Docker Desktop's VM is shared with other containers) |
+| `E2E_HOST=1` | macOS: the old host mode with host browsers, which play audio through the speakers |
+
+The runner receives the caller's `E2E_*`, `SWARM_*`, `PLAYWRIGHT_*` and `PW_*` variables, `CI`, `DEBUG` and
+`NO_COLOR`. Its ports are fixed (app 3000, Caddy 8080): `E2E_APP_PORT` and `E2E_HTTP_PORT` apply to host mode only.
+`E2E_NIGHTLY_BROWSERS=1` is refused (§6.3).
+
+How the runner works:
+- **Mounts.** The checkout is mounted at its own absolute path, so `logs/e2e/`, `test-results/`,
+  `playwright-report/`, `.data/e2e/` and every absolute path are the same inside and outside. `node_modules`,
+  `.output` and `.nuxt` are Linux-only volumes named `blinq-e2e-<hash of the checkout path>-*` (the script prints the
+  prefix): the host's macOS copies (`@node-rs/argon2`, rolldown, esbuild and other native packages) are never
+  touched, and a worktree never shares a build with the main checkout. The pnpm store volume `blinq-e2e-pnpm-store` is
+  shared. To free the space of a removed worktree: `docker volume rm $(docker volume ls -q --filter name=<prefix>)`.
+- **Build.** Nitro deletes and recreates its output directory, which fails on a mount point, so in the runner it
+  builds into a container directory (a global `.nuxtrc` in the runner's `HOME`) and `scripts/e2e.sh` copies the result
+  into the `.output` volume.
+- **Audio.** PulseAudio runs in the runner with a single null sink (`docker/e2e/runner-init.sh`). Firefox plays audio
+  only through PulseAudio, and without a sound server its `AudioContext` never leaves `suspended`: the mic chain falls
+  back to the raw microphone (F-060) and the Web Audio specs (`media/mic-chain`, RNNoise, gain) fail. Nothing is
+  played on a real device.
+- **Logs.** The app writes `logs/e2e/app.log`; the runner's Caddy writes its access log straight into
+  `logs/e2e/caddy.log` (`E2E_ACCESS_LOG_OUTPUT`), so the log scan of §6.5 sees a request as soon as it is logged.
+- **Containers.** The runner mounts the Docker socket: `security/log-scan` reads `docker logs` of the runner's LiveKit
+  and Postgres, and `rooms/key-leak` runs `pg_dump` in that Postgres. The runner sets `E2E_LIVEKIT_CONTAINER` and
+  `E2E_POSTGRES_CONTAINER` (`blinq-e2e-docker-livekit-1`, `blinq-e2e-docker-postgres-1`); without them the specs use
+  the dev stack's `blinq-dev-livekit-1` and `blinq-dev-postgres-1` (host mode). The load swarm reads the same
+  LiveKit variable unless `SWARM_SFU_CONTAINER` is set.
+- **Load runs.** `SWARM_BOTS=12 SWARM_DURATION=120 sh scripts/e2e-docker.sh --config tests/load/playwright.config.ts`
+  runs the swarm in the runner (`E2E_HTTP_PORT` is not needed there). Browsers and the SFU share the namespace, so
+  media never crosses eth0 and the swarm's SFU Mbit/s columns read about 0; its CPU and memory columns are real.
+
+Host mode (`sh scripts/e2e.sh …` on Linux and in CI; `E2E_HOST=1` on macOS) needs the shared dev stack
+(`pnpm dev:deps`) and a set-up worktree (§7). Stop your `pnpm dev` server first (the E2E server uses your port). The
+script holds the lock, builds the test build, recreates and migrates the `blinq_e2e` database in `blinq-dev-postgres-1`,
+starts `.output/server/index.mjs` with the E2E environment (§6.1), starts the e2e Caddy (`docker/e2e/compose.yml`,
+project `blinq-e2e`), waits for health, runs Playwright with your arguments, and stops everything on exit.
+Variables: `E2E_SKIP_BUILD=1` reuses the last test build; `E2E_APP_PORT` overrides the app port; `E2E_DB_NAME`
+overrides the database name; `E2E_HTTP_PORT` (default 8080) moves the e2e Caddy, and with it `E2E_BASE_URL`,
+`PUBLIC_URL` and `LIVEKIT_PUBLIC_URL`, to another port when something else holds 8080.
+
+Artifacts (both modes): `test-results/` (trace, video and screenshot kept on failure), `playwright-report/`, and the
+logs in `logs/e2e/{app,caddy}.log`. `pnpm exec playwright show-report` and `show-trace` only open the results and
+start no test browser, so they may run on the host.
 
 ### 6.3 Projects and fake media (`playwright.config.ts`)
 
@@ -204,13 +294,16 @@ Artifacts: `test-results/` (trace, video and screenshot kept on failure), `playw
 | `webkit-ui` | Desktop Safari (WebKit) | mock capture devices through `context.grantPermissions(['camera', 'microphone'])` (Playwright ≥ 1.62) | `@ui` specs |
 | `mobile-chromium` | Pixel 7 emulation | the Chromium flags | `@responsive` specs |
 
+- Locally all four projects run on the runner's Linux builds of Chromium, Firefox and WebKit, as in CI. The nightly
+  projects of `E2E_NIGHTLY_BROWSERS=1` are not run locally, and `scripts/e2e-docker.sh` refuses the variable: `msedge`
+  has no Linux arm64 build, and `webkit` needs macOS WebKit, which no container provides.
 - Linux WebKit has no `RTCRtpScriptTransform`, so it cannot do E2EE. There the call page must show the
   unsupported-browser screen and never connect (a useful `@ui` check). E2EE on WebKit runs only in the non-blocking
   macOS WebKit nightly job.
 - Fake devices produce moving video and a tone. Specs assert decoded frames and non-silent audio, never pixel content.
 - Screen share uses the `useFakeScreenSource` hook (a 1920×1080 canvas), not the desktop picker, so it is deterministic.
 - For a Chromium ↔ Firefox call in one test, `joinAs` launches the other browser with the same flags or prefs.
-- Nightly adds Edge (`channel: 'msedge'`) and macOS WebKit: TODO(devops-ci).
+- Nightly adds Edge (`channel: 'msedge'`, nightly.yml on Linux x64). macOS WebKit with E2EE is checked by hand (§9).
 - Tags, set with the `tag` option (`test('login renders', { tag: '@ui' }, async ({ page }) => { … })`): `@ui` (no media
   or E2EE; also runs in `webkit-ui`), `@responsive` (also runs in `mobile-chromium`), `@nightly` (nightly.yml only; PR
   runs pass `--grep-invert @nightly`) (decision).
@@ -313,7 +406,8 @@ Other latency limits in stage DoDs are asserted as written, everywhere: lobby ad
   (`MediaRecorder.isTypeSupported` false, for example MP4 in Firefox) is skipped with an annotation, never passed.
 - **Flow.** A host with an account records a two-person call for about 10 s, stops, polls until the recording is
   `ready`, and downloads the server's MP4.
-- **File checks.** ffmpeg and ffprobe come from `PATH` (local ffmpeg 9; in CI copied from `mwader/static-ffmpeg:9.0.2`):
+- **File checks.** ffmpeg and ffprobe 9 come from `PATH` (copied from `mwader/static-ffmpeg:9.0.2` into the runner
+  image and in CI):
   - `ffprobe -v error -show_entries format=duration:stream=codec_type,codec_name -of json out.mp4`: duration about
     10 s (tolerance set in Stage 08), exactly one `h264` video stream and one `aac` audio stream;
   - `ffmpeg -hide_banner -nostats -i out.mp4 -vn -af volumedetect -f null -`: `max_volume` above the Stage 08
@@ -349,25 +443,30 @@ Other latency limits in stage DoDs are asserted as written, everywhere: lobby ad
 - **Setup.** `node scripts/worktree-setup.mjs <agent> <port>` installs with the frozen lockfile, creates and migrates
   `blinq_<agent>` (dashes become underscores) on the shared Postgres at `127.0.0.1:55432`, vendors browser assets, and
   writes `PORT`, `PUBLIC_URL` and `DATABASE_URL` into the worktree's `.env`.
-- **Ports.** 3000 is the orchestrator's; agents use 3001–3005. The dev LiveKit sends webhooks only to
-  `host.docker.internal:3000–3005`.
+- **Ports.** 3000 is the orchestrator's; agents use 3001–3005 for `pnpm dev`. The dev LiveKit sends webhooks only to
+  `host.docker.internal:3000–3005`. E2E in the Docker runner uses no host port at all, so it never collides with a
+  `pnpm dev` server or another program on 8080.
 - **Heavy commands** run under `sh scripts/with-lock.sh <command>`: `pnpm build`, `pnpm build:test`, `pnpm test:api`,
-  `pnpm test:e2e`, image builds. The lock is the directory `/tmp/blinq-heavy.lock` (`BLINQ_LOCK_DIR` overrides it); a
-  lock left by a killed process is removed automatically. One E2E run at a time, machine-wide.
+  image builds. `scripts/e2e-docker.sh` and `scripts/e2e.sh` take the lock themselves. The lock is the directory
+  `/tmp/blinq-heavy.lock` (`BLINQ_LOCK_DIR` overrides it); a lock left by a killed process is removed automatically.
+  One E2E run at a time, machine-wide: the runner's compose project `blinq-e2e-docker` exists once per machine.
+- **Browsers only in Docker.** On the maintainer's Mac every Playwright run (E2E, nightly specs, load) goes through
+  `sh scripts/e2e-docker.sh` (§6.2); never start a browser on the host.
 - **The shared dev stack is not yours.** Never run `docker compose down`, run `up` with other settings, or remove its
   volumes. If it is down, say so in your report.
 - **Shared services, private data.** Postgres: only your databases (`blinq_<agent>`, `blinq_<agent>_test_api`). Mailpit:
   search by your recipients, never clear it. LiveKit: unique room names, delete only your own. Never assert on
   server-wide counts.
-- Each worktree has its own `.output/`, `test-results/` and `playwright-report/`. `.claude/**` is excluded from Vitest,
-  ESLint, TypeScript and the Nuxt watcher.
+- Each worktree has its own `.output/`, `test-results/` and `playwright-report/`, and its own runner volumes
+  (`blinq-e2e-<hash>-node-modules`, `-output`, `-nuxt`). `.claude/**` is excluded from Vitest, ESLint, TypeScript and
+  the Nuxt watcher.
 
 ## 8. CI (`.github/workflows/`, owner `devops-ci`)
 
 | Workflow | Runs on | Jobs |
 |---|---|---|
 | `ci.yml` | push, PR | frozen install + `git diff --exit-code`; lint; typecheck; `unit` + `nuxt`; `check:english` over `git ls-files`; gitleaks; actionlint; `pnpm audit`; `build` + `build:test` (the prod build has no `__blinqTest`, and `/dev/call` returns 404); API tests (Postgres and Mailpit services, fake RoomService); a small real-LiveKit API job |
-| `e2e.yml` | push, PR | dev compose (LiveKit `node_ip` = the runner's eth0 IP); test build; e2e Caddy; `chromium` + `firefox` (1 worker), `webkit-ui`, `mobile-chromium`; ffmpeg/ffprobe from `mwader/static-ffmpeg:9.0.2`; report, traces and logs uploaded on failure |
+| `e2e.yml` | push, PR | `scripts/e2e.sh` in host mode on the Linux runner: dev compose (LiveKit `node_ip` = the runner's eth0 IP); test build; e2e Caddy; `chromium` + `firefox` (1 worker), `webkit-ui`, `mobile-chromium`; ffmpeg/ffprobe from `mwader/static-ffmpeg:9.0.2`; report, traces and logs uploaded on failure |
 | `docker.yml` | push, PR (from Stage 09a) | image build with BuildKit cache; `docker compose config`; `scripts/smoke-prod.sh` (prod compose with `TLS_MODE=internal`, a Playwright container on the host network); `ss -tulpn` shows only the intended public listeners |
 | `nightly.yml` | schedule | join-time p95, network degradation, long recording, Edge, macOS WebKit (non-blocking) |
 | `release.yml` | `workflow_dispatch` | prepared; never run until the user asks |
@@ -380,7 +479,13 @@ Local equivalents of the CI-only checks:
   test build does).
 - `sh scripts/scan-secrets.sh` — gitleaks over the repository history (`.gitleaks.toml` allowlists the public dev-only
   values in `.env.dev.example` and `docker-compose.dev.yml`).
-- `sh scripts/lint-workflows.sh` — actionlint and shellcheck over `.github/workflows/`.
+- `sh scripts/lint-workflows.sh` — actionlint over `.github/workflows/` and shellcheck over every `*.sh` script.
+- `sh scripts/e2e-docker.sh --project=chromium --project=firefox --project=webkit-ui --project=mobile-chromium
+  --grep-invert @nightly` — the `e2e.yml` selection in the Docker runner (§6.2). Nightly specs run the same way with
+  the nightly environment and arguments, for example
+  `E2E_NIGHTLY=1 sh scripts/e2e-docker.sh --project=chromium --grep @nightly recording/long`.
+  `network/degradation` needs `tc` on the SFU's interface and stays CI-only (§6.9); Edge and macOS WebKit are not run
+  locally (§6.3).
 - `pnpm audit` is report-only in `ci.yml` and blocking in `release.yml`.
 
 ## 9. Manual cross-browser matrix `[user]`

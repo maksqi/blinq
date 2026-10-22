@@ -1,0 +1,180 @@
+# Docker E2E runner (docs/TESTING.md §6.2). scripts/e2e-docker.sh starts it for one run and removes it again (the
+# volumes stay); don't run it by hand.
+#
+# Every service shares the runner's network namespace (network_mode: service:runner). Browsers, the app (started by
+# scripts/e2e.sh inside the runner), Caddy, LiveKit, Postgres and Mailpit reach each other on 127.0.0.1 with the same
+# ports as on a developer machine, so the fixtures work unchanged, and nothing is published on the host. The checkout
+# is mounted at its own absolute path; node_modules, .output and .nuxt are Linux-only volumes named after the checkout
+# (E2E_VOLUME_PREFIX), so the host's macOS copies are never touched and two checkouts never share a build.
+name: blinq-e2e-docker
+
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: runner.Dockerfile
+    image: blinq-e2e-runner:playwright-1.63.0
+    init: true
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    ipc: host
+    working_dir: ${E2E_ROOT:?set by scripts/e2e-docker.sh}
+    environment:
+      HOME: /tmp
+      NUXT_TELEMETRY_DISABLED: '1'
+      # scripts/e2e.sh runs its in-container mode (no lock, no dev stack, psql over TCP).
+      E2E_IN_DOCKER: '1'
+      # Read by security/log-scan, rooms/key-leak and the load swarm (docker logs, docker exec pg_dump, docker stats).
+      E2E_LIVEKIT_CONTAINER: blinq-e2e-docker-livekit-1
+      E2E_POSTGRES_CONTAINER: blinq-e2e-docker-postgres-1
+    volumes:
+      - type: bind
+        source: ${E2E_ROOT}
+        target: ${E2E_ROOT}
+      - type: volume
+        source: node_modules
+        target: ${E2E_ROOT}/node_modules
+      - type: volume
+        source: output
+        target: ${E2E_ROOT}/.output
+      - type: volume
+        source: nuxt
+        target: ${E2E_ROOT}/.nuxt
+      - type: volume
+        source: pnpm-store
+        target: /pnpm-store
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    healthcheck:
+      # runner-init.sh is ready once PulseAudio answers.
+      test: ['CMD', 'pactl', 'info']
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    network_mode: service:runner
+    depends_on:
+      runner:
+        condition: service_healthy
+    command: ['caddy', 'run', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile']
+    environment:
+      E2E_APP_UPSTREAM: 127.0.0.1:3000
+      E2E_LIVEKIT_UPSTREAM: 127.0.0.1:7880
+      # Written straight into logs/e2e/caddy.log, so the fixtures' log scan sees a request as soon as it is logged.
+      E2E_ACCESS_LOG_OUTPUT: file /logs/caddy.log
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - type: bind
+        source: ${E2E_ROOT}/logs/e2e
+        target: /logs
+    # Same hardening as production: read-only root, tmpfs for Caddy's data dirs, no capabilities beyond binding.
+    read_only: true
+    tmpfs:
+      - /data
+      - /config
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:2020/health']
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  livekit:
+    image: livekit/livekit-server:v1.13.7
+    network_mode: service:runner
+    depends_on:
+      runner:
+        condition: service_healthy
+    # node_ip is the runner's eth0 address: Firefox rejects loopback ICE candidates, and browsers in the namespace reach
+    # this address directly. Media never leaves the namespace.
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        node_ip=$$(ip -4 -o addr show eth0 | awk '{ split($$4, address, "/"); print address[1]; exit }')
+        [ -n "$$node_ip" ] || { echo 'livekit: no IPv4 address on eth0' >&2; exit 1; }
+        exec /livekit-server --node-ip "$$node_ip"
+    environment:
+      # As docker-compose.dev.yml (strict parsing: an unknown key stops the server), with webhooks to the app in this
+      # namespace. E2E_LIVEKIT_SEND_SIDE_BWE=true switches to send-side bandwidth estimation for A/B runs.
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: false
+          congestion_control:
+            use_send_side_bwe: ${E2E_LIVEKIT_SEND_SIDE_BWE:-false}
+        keys:
+          devkey: dev-only-livekit-secret-not-for-production-000000
+        webhook:
+          api_key: devkey
+          urls:
+            - http://127.0.0.1:3000/api/webhooks/livekit
+        room:
+          auto_create: false
+          empty_timeout: 300
+          departure_timeout: 20
+          max_participants: 25
+          enable_remote_unmute: false
+        logging:
+          level: info
+          pion_level: error
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:7880/']
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  postgres:
+    image: postgres:18.6-alpine3.24
+    network_mode: service:runner
+    depends_on:
+      runner:
+        condition: service_healthy
+    environment:
+      # The dev credentials and port of .env.dev.example (DATABASE_URL), so the E2E environment is the same.
+      POSTGRES_USER: blinq
+      POSTGRES_PASSWORD: blinq-dev
+      POSTGRES_DB: blinq
+      PGPORT: '55432'
+    # Throwaway data: every run starts from an empty cluster.
+    tmpfs:
+      - /var/lib/postgresql
+    shm_size: 256m
+    healthcheck:
+      # TCP check: the temporary init server only listens on the socket, so this cannot report healthy too early.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U blinq -d blinq']
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  mailpit:
+    image: axllent/mailpit:v1.31.3
+    network_mode: service:runner
+    depends_on:
+      runner:
+        condition: service_healthy
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: '1'
+      MP_SMTP_AUTH_ALLOW_INSECURE: '1'
+    healthcheck:
+      test: ['CMD', '/mailpit', 'readyz']
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  node_modules:
+    name: ${E2E_VOLUME_PREFIX:?set by scripts/e2e-docker.sh}-node-modules
+  output:
+    name: ${E2E_VOLUME_PREFIX}-output
+  nuxt:
+    name: ${E2E_VOLUME_PREFIX}-nuxt
+  # Content-addressed and shared by every checkout.
+  pnpm-store:
+    name: blinq-e2e-pnpm-store

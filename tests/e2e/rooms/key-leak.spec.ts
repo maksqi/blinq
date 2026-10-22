@@ -91,6 +91,9 @@ test.describe('key hygiene', () => {
     const host = await rooms.createUser({ displayName: 'Kim Keyholder' })
     await rooms.useIdentity(context, host)
     await page.goto('/dashboard')
+    // A click before hydration does nothing (the button has no handler yet), so wait for the app and its chunks.
+    await page.waitForFunction(() => Boolean((document.querySelector('#__nuxt') as { __vue_app__?: unknown } | null)?.__vue_app__))
+    await page.waitForLoadState('networkidle')
     await page.getByTestId('new-room').click()
     await page.getByTestId('create-room-dialog').getByLabel('Name').fill('Key hygiene')
     await spendJoinBudget(2)
@@ -186,10 +189,12 @@ test.describe('key hygiene', () => {
     for (const frame of recorded.frames) expect(findIn(frame, forbiddenWithProof)).toEqual([])
 
     // 4. The database: the server stores sha256(proof) and never anything else derived from the key.
+    // The dev stack's Postgres in host mode; the Docker runner (scripts/e2e-docker.sh) names its own container.
     const url = new URL(process.env.DATABASE_URL!)
+    const postgres = process.env.E2E_POSTGRES_CONTAINER ?? 'blinq-dev-postgres-1'
     const dump = execFileSync(
       'docker',
-      ['exec', 'blinq-dev-postgres-1', 'pg_dump', '-U', decodeURIComponent(url.username), url.pathname.slice(1)],
+      ['exec', postgres, 'pg_dump', '-U', decodeURIComponent(url.username), url.pathname.slice(1)],
       { maxBuffer: 512 * 1024 * 1024 },
     )
     expect(dump.toString('utf8')).toContain(slug)
